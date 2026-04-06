@@ -1,0 +1,34 @@
+import cv2
+import numpy as np
+
+def analyze_frame(frame_path: str) -> dict:
+    """
+    Analyzes a saved frame using traditional CV techniques.
+    Returns a dictionary of metrics.
+    """
+    # Load frame
+    img = cv2.imread(frame_path)
+    if img is None:
+        return {"error": "Could not read image"}
+
+    # Convert to grayscale for most metrics
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # 1. Black Screen Detection
+    # Calculate Root Mean Square contrast or simple mean brightness
+    mean_brightness = np.mean(gray)
+    is_black_screen = mean_brightness < 5.0  # Threshold out of 255
+
+    # 2. Blur / Macroblocking rough estimation
+    # Laplacian variance is a common way to measure blur/focus
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    # High compression/macroblocking often results in either very low variance (blur) 
+    # or artificial high variance on edges. We will flag low variance as a potential issue
+    is_blurry = laplacian_var < 50.0
+
+    return {
+        "mean_brightness": float(mean_brightness),
+        "is_black_screen": bool(is_black_screen),
+        "laplacian_variance": float(laplacian_var),
+        "is_blurry": bool(is_blurry)
+    }
