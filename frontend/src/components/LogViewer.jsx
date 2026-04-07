@@ -18,7 +18,7 @@ export default function LogViewer({ logs, apiUrl }) {
         if (log.issue_type === 'black_screen') titleColor = 'var(--error-color)';
         if (log.issue_type === 'slate') titleColor = 'var(--warning-color)';
         if (log.issue_type === 'macroblocking') titleColor = 'var(--error-color)';
-        if (log.issue_type === 'no_audio') titleColor = 'var(--audio-error)';
+        if (log.issue_type === 'no_audio' || log.issue_type === 'static_audio') titleColor = 'var(--audio-error)';
 
         const isExpanded = expandedLog === log.id;
 

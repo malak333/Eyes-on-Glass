@@ -11,12 +11,12 @@ import httpx
 
 from contextlib import asynccontextmanager
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     asyncio.create_task(resource_monitor_task())
     yield
-
 
 
 app = FastAPI(title="Eyes on Glass - AI Video Monitoring API", lifespan=lifespan)

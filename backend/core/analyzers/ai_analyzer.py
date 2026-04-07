@@ -12,7 +12,10 @@ async def analyze_frame_ai(frame_path: str, model: str = "moondream") -> dict:
             encoded_string = base64.b64encode(
                 image_file.read()).decode('utf-8')
 
-        prompt = "Describe this image briefly. Is it a blank slate, a test pattern, or a normal video frame?"
+        prompt = (
+            "Describe this image briefly. "
+            "Is it a blank slate, a test pattern, or a normal video frame?"
+        )
 
         async with httpx.AsyncClient() as client:
             response = await client.post(

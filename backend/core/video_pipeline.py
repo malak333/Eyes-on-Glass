@@ -18,7 +18,8 @@ UPLOADS_DIR = os.path.join(
     "uploads")
 
 # Store background processing tracking progress
-# Format: { "video_filename.mp4": {"status": "extracting|analyzing|completed|error", "current": 0, "total": 0} }
+# Format: { "video_filename.mp4": {"status": "extracting|analyzing|completed|error",
+# "current": 0, "total": 0} }
 analysis_progress = {}
 
 # Ensure thumbnails directory exists
@@ -27,7 +28,8 @@ os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
 async def detect_pts_offset(video_path: str, threshold: float = 0.1) -> bool:
     """
-    Checks the Presentation Time Stamp (PTS) offset between the first video and audio streams at the container level.
+    Checks the Presentation Time Stamp (PTS) offset between the first video
+    and audio streams at the container level.
     Returns True if an issue > threshold is detected, indicating a multiplexing lip sync fault.
     """
     cmd = [
@@ -72,11 +74,48 @@ async def detect_lip_sync_ai(video_path: str) -> bool:
     """
     Stub for Approach 2: AI Lip Sync Analysis.
     This would run a deep learning model (e.g., SyncNet, Wav2Lip Discriminator)
-    that correlates generated face bounding boxes with audio phonemes to detect baked-in sync errors.
+    that correlates generated face bounding boxes with audio phonemes to detect
+    baked-in sync errors.
     Returns True if an AI model determines a lip sync issue.
     """
     # For MVP: Return False since we do not have a SyncNet pipeline configured
     # yet.
+    return False
+
+
+async def detect_static_audio(video_path: str, threshold: float = 0.3) -> bool:
+    """
+    Detects if the audio exhibits high zero-crossing rates indicative of static/white noise.
+    """
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-map", "0:a:0?",  # use first audio stream if it exists
+        "-af", "astats",
+        "-f", "null", "-"
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    _, stderr = await process.communicate()
+    stderr_str = stderr.decode()
+
+    import re
+    pattern = re.compile(r"Zero crossings rate:\s+([\d\.]+)")
+    rates = pattern.findall(stderr_str)
+
+    if not rates:
+        return False
+
+    try:
+        max_rate = max([float(r) for r in rates])
+        if max_rate > threshold:
+            print(f"Static audio detected with max zero crossing rate: {max_rate}")
+            return True
+    except Exception as e:
+        print(f"Error parsing static audio detection: {e}")
+
     return False
 
 
@@ -160,10 +199,9 @@ async def extract_and_analyze(video_filename: str):
         THUMBNAILS_DIR,
         f"{video_filename}_frame_%04d.jpg")
     try:
-        (ffmpeg .input(video_path) .filter('fps',
-                                           fps=fps_to_extract) .output(frame_pattern,
-                                                                       vframes=int(duration * fps_to_extract),
-                                                                       **{'qscale:v': 2}) .overwrite_output() .run(quiet=True))
+        (ffmpeg .input(video_path) .filter('fps', fps=fps_to_extract) .output(
+            frame_pattern, vframes=int(duration * fps_to_extract), **{'qscale:v': 2})
+            .overwrite_output() .run(quiet=True))
     except ffmpeg.Error as e:
         print(f"Ffmpeg error: {e}")
         analysis_progress[video_filename]["status"] = "error"
@@ -172,6 +210,9 @@ async def extract_and_analyze(video_filename: str):
     # Detect audio dropouts using async ffmpeg process
     silence_intervals = await detect_silence(video_path)
     print(f"Detected silence intervals: {silence_intervals}")
+
+    # Detect static audio
+    has_static_audio = await detect_static_audio(video_path)
 
     # Now, process the extracted frames
     # Count generated frames
@@ -190,8 +231,7 @@ async def extract_and_analyze(video_filename: str):
         # 1. Run CV Analysis first
         cv_results = analyze_frame(frame_path)
 
-        issue_type = "ok"
-        confidence = 1.0
+        issues_found = []
 
         # Check audio silence first since it's pre-calculated
         is_silent = any(
@@ -201,45 +241,53 @@ async def extract_and_analyze(video_filename: str):
         macro_confidence = max(
             0.0, 1.0 - (cv_results.get("laplacian_variance", 50.0) / 50.0))
 
-        if cv_results.get("is_black_screen"):
-            issue_type = "black_screen"
-        elif cv_results.get("is_blurry") and macro_confidence >= 0.80:
-            issue_type = "macroblocking"
-            confidence = round(macro_confidence, 2)
-        elif is_silent:
-            issue_type = "no_audio"
-            confidence = 1.0
-        elif has_lip_sync_issue:
-            issue_type = "lip_sync"
-            confidence = 0.95
+        is_black = cv_results.get("is_black_screen")
+
+        if is_black:
+            issues_found.append(("black_screen", 1.0))
         else:
+            if cv_results.get("is_blurry") and macro_confidence >= 0.80:
+                issues_found.append(("macroblocking", round(macro_confidence, 2)))
+
+            if has_lip_sync_issue:
+                issues_found.append(("lip_sync", 0.95))
+
+        if is_silent:
+            issues_found.append(("no_audio", 1.0))
+        elif has_static_audio:
+            issues_found.append(("static_audio", 1.0))
+
+        if not issues_found:
             # 2. If no CV/Audio issues, run lighter AI Analysis (moondream)
             ai_results = await analyze_frame_ai(frame_path, model="moondream")
 
             if ai_results.get("is_slate"):
-                issue_type = "slate"
-                confidence = ai_results.get("confidence", 0.85)
+                issues_found.append(("slate", ai_results.get("confidence", 0.85)))
             else:
                 # 3. If Moondream does NOT detect anything, fallback to heavier
                 # LLaVA for double check
                 fallback_ai_results = await analyze_frame_ai(frame_path, model="llava")
                 if fallback_ai_results.get("is_slate"):
-                    issue_type = "slate"
-                    confidence = fallback_ai_results.get("confidence", 0.85)
+                    issues_found.append(("slate", fallback_ai_results.get("confidence", 0.85)))
 
-        # Add to DB
+        if not issues_found:
+            issues_found.append(("ok", 1.0))
+
+        # Add entries to DB
         # To simulate the network log requirement ("source, backbone, dest")
-        log_entry = VideoLog(
-            video_filename=video_filename,
-            timestamp_sec=timestamp_sec,
-            node_source="Primary-Ingest-A",
-            node_backbone="East-Backbone-2",
-            node_dest="Distribution-Node",
-            issue_type=issue_type,
-            issue_score=confidence,
-            thumbnail_path=frame_file
-        )
-        db.add(log_entry)
+        for issue_type, confidence in issues_found:
+            log_entry = VideoLog(
+                video_filename=video_filename,
+                timestamp_sec=timestamp_sec,
+                node_source="Primary-Ingest-A",
+                node_backbone="East-Backbone-2",
+                node_dest="Distribution-Node",
+                issue_type=issue_type,
+                issue_score=confidence,
+                thumbnail_path=frame_file
+            )
+            db.add(log_entry)
+
         db.commit()
 
     db.close()

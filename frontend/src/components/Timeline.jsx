@@ -19,7 +19,7 @@ export default function Timeline({ logs }) {
         if (log.issue_type === "black_screen") color = "var(--error-color)";
         if (log.issue_type === "slate") color = "var(--warning-color)";
         if (log.issue_type === "macroblocking") color = "var(--error-color)";
-        if (log.issue_type === "no_audio") color = "var(--audio-error)";
+        if (log.issue_type === "no_audio" || log.issue_type === "static_audio") color = "var(--audio-error)";
 
         return (
           <div 

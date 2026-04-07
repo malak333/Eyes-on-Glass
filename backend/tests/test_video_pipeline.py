@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
-from core.video_pipeline import extract_and_analyze, detect_pts_offset, detect_lip_sync_ai, detect_silence
+from core.video_pipeline import extract_and_analyze, detect_pts_offset, detect_lip_sync_ai, detect_silence, detect_static_audio
 
 
 @pytest.mark.asyncio
@@ -41,3 +41,27 @@ async def test_detect_pts_offset(mock_create_exec):
 async def test_detect_lip_sync_ai():
     # Testing the stub
     assert await detect_lip_sync_ai("test.mp4") is False
+
+
+@pytest.mark.asyncio
+@patch("core.video_pipeline.asyncio.create_subprocess_exec")
+async def test_detect_static_audio_true(mock_create_exec):
+    mock_process = AsyncMock()
+    mock_process.communicate.return_value = (b"", b"Zero crossings rate: 0.509495\n")
+    mock_create_exec.return_value = mock_process
+    
+    # Value 0.509495 > threshold of 0.3
+    res = await detect_static_audio("test.mp4", threshold=0.3)
+    assert res is True
+
+
+@pytest.mark.asyncio
+@patch("core.video_pipeline.asyncio.create_subprocess_exec")
+async def test_detect_static_audio_false(mock_create_exec):
+    mock_process = AsyncMock()
+    mock_process.communicate.return_value = (b"", b"Zero crossings rate: 0.041674\n")
+    mock_create_exec.return_value = mock_process
+    
+    # Value 0.041674 <= threshold of 0.3
+    res = await detect_static_audio("test.mp4", threshold=0.3)
+    assert res is False

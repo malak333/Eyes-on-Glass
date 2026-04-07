@@ -10,11 +10,15 @@ jobs:
   backend-lint-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+    - name: Install system dependencies for OpenCV/FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -29,14 +33,14 @@ jobs:
         cd backend
         PYTHONPATH=. pytest --cov=app --cov=core --cov=db tests/
 
-  frontend-lint:
+  frontend-lint-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Use Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
-        node-version: '18.x'
+        node-version: '20.x'
     - name: Install dependencies
       run: |
         cd frontend
@@ -45,3 +49,7 @@ jobs:
       run: |
         cd frontend
         npm run lint
+    - name: Run tests
+      run: |
+        cd frontend
+        npm test
