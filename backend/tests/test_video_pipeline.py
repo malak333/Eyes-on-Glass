@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
-from core.video_pipeline import extract_and_analyze, detect_pts_offset, detect_lip_sync_ai, detect_silence, detect_static_audio
+from core.video_pipeline import extract_and_analyze, detect_pts_offset, detect_lip_sync_ai, detect_silence, detect_audio_anomalies
 
 
 @pytest.mark.asyncio
@@ -45,23 +45,25 @@ async def test_detect_lip_sync_ai():
 
 @pytest.mark.asyncio
 @patch("core.video_pipeline.asyncio.create_subprocess_exec")
-async def test_detect_static_audio_true(mock_create_exec):
+async def test_detect_audio_anomalies_static(mock_create_exec):
     mock_process = AsyncMock()
-    mock_process.communicate.return_value = (b"", b"Zero crossings rate: 0.509495\n")
+    mock_process.communicate.return_value = (b"", b"Zero crossings rate: 0.509495\nFlat factor: 1.0\n")
     mock_create_exec.return_value = mock_process
     
     # Value 0.509495 > threshold of 0.3
-    res = await detect_static_audio("test.mp4", threshold=0.3)
-    assert res is True
+    res_static, res_buzzing = await detect_audio_anomalies("test.mp4", static_hz_threshold=0.3)
+    assert res_static is True
+    assert res_buzzing is False
 
 
 @pytest.mark.asyncio
 @patch("core.video_pipeline.asyncio.create_subprocess_exec")
-async def test_detect_static_audio_false(mock_create_exec):
+async def test_detect_audio_anomalies_buzzing(mock_create_exec):
     mock_process = AsyncMock()
-    mock_process.communicate.return_value = (b"", b"Zero crossings rate: 0.041674\n")
+    mock_process.communicate.return_value = (b"", b"Zero crossings rate: 0.041674\nFlat factor: 25.0\n")
     mock_create_exec.return_value = mock_process
     
-    # Value 0.041674 <= threshold of 0.3
-    res = await detect_static_audio("test.mp4", threshold=0.3)
-    assert res is False
+    # Flat factor 25 > threshold of 10.0
+    res_static, res_buzzing = await detect_audio_anomalies("test.mp4", static_hz_threshold=0.3, flat_factor_threshold=10.0)
+    assert res_static is False
+    assert res_buzzing is True

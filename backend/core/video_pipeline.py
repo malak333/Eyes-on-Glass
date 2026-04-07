@@ -83,9 +83,15 @@ async def detect_lip_sync_ai(video_path: str) -> bool:
     return False
 
 
-async def detect_static_audio(video_path: str, threshold: float = 0.3) -> bool:
+async def detect_audio_anomalies(
+    video_path: str,
+    static_hz_threshold: float = 0.3,
+    flat_factor_threshold: float = 10.0
+) -> tuple:
     """
-    Detects if the audio exhibits high zero-crossing rates indicative of static/white noise.
+    Detects if the audio exhibits:
+    1. high zero-crossing rates indicative of static/white noise.
+    2. high flat factor indicative of clipping/buzzing audio.
     """
     cmd = [
         "ffmpeg", "-i", video_path,
@@ -102,21 +108,34 @@ async def detect_static_audio(video_path: str, threshold: float = 0.3) -> bool:
     stderr_str = stderr.decode()
 
     import re
-    pattern = re.compile(r"Zero crossings rate:\s+([\d\.]+)")
-    rates = pattern.findall(stderr_str)
+    zc_pattern = re.compile(r"Zero crossings rate:\s+([\d\.]+)")
+    flat_pattern = re.compile(r"Flat factor:\s+([\d\.]+)")
 
-    if not rates:
-        return False
+    zc_rates = zc_pattern.findall(stderr_str)
+    flat_factors = flat_pattern.findall(stderr_str)
 
-    try:
-        max_rate = max([float(r) for r in rates])
-        if max_rate > threshold:
-            print(f"Static audio detected with max zero crossing rate: {max_rate}")
-            return True
-    except Exception as e:
-        print(f"Error parsing static audio detection: {e}")
+    has_static = False
+    has_buzzing = False
 
-    return False
+    if zc_rates:
+        try:
+            max_zc = max([float(r) for r in zc_rates])
+            if max_zc > static_hz_threshold:
+                print(f"Static audio detected with max zero crossing rate: {max_zc}")
+                has_static = True
+        except Exception as e:
+            print(f"Error parsing static audio detection: {e}")
+
+    if flat_factors:
+        try:
+            max_flat = max([float(f) for f in flat_factors])
+            if max_flat > flat_factor_threshold:
+                print(f"Buzzing audio detected with max flat factor: {max_flat}")
+                has_buzzing = True
+        except Exception as e:
+            print(f"Error parsing buzzing audio detection: {e}")
+
+    return has_static, has_buzzing
 
 
 async def detect_silence(video_path: str):
@@ -211,8 +230,8 @@ async def extract_and_analyze(video_filename: str):
     silence_intervals = await detect_silence(video_path)
     print(f"Detected silence intervals: {silence_intervals}")
 
-    # Detect static audio
-    has_static_audio = await detect_static_audio(video_path)
+    # Detect static and buzzing audio
+    has_static_audio, has_buzzing_audio = await detect_audio_anomalies(video_path)
 
     # Now, process the extracted frames
     # Count generated frames
@@ -243,39 +262,48 @@ async def extract_and_analyze(video_filename: str):
 
         is_black = cv_results.get("is_black_screen")
 
+        # Track audio and video issues independently to ensure AI runs even if audio fails
+        if is_silent:
+            issues_found.append(("no_audio", 1.0, "ffmpeg"))
+        elif has_buzzing_audio:
+            issues_found.append(("buzzing_audio", 1.0, "ffmpeg"))
+        elif has_static_audio:
+            issues_found.append(("static_audio", 1.0, "ffmpeg"))
+
+        video_issue_found = False
         if is_black:
-            issues_found.append(("black_screen", 1.0))
+            issues_found.append(("black_screen", 1.0, "opencv"))
+            video_issue_found = True
         else:
             if cv_results.get("is_blurry") and macro_confidence >= 0.80:
-                issues_found.append(("macroblocking", round(macro_confidence, 2)))
+                issues_found.append(("macroblocking", round(macro_confidence, 2), "opencv"))
+                video_issue_found = True
 
             if has_lip_sync_issue:
-                issues_found.append(("lip_sync", 0.95))
+                issues_found.append(("lip_sync", 0.95, "ffmpeg"))
+                video_issue_found = True
 
-        if is_silent:
-            issues_found.append(("no_audio", 1.0))
-        elif has_static_audio:
-            issues_found.append(("static_audio", 1.0))
-
-        if not issues_found:
-            # 2. If no CV/Audio issues, run lighter AI Analysis (moondream)
+        if not video_issue_found:
+            # 2. If no CV video issues, run lighter AI Analysis (moondream)
             ai_results = await analyze_frame_ai(frame_path, model="moondream")
 
             if ai_results.get("is_slate"):
-                issues_found.append(("slate", ai_results.get("confidence", 0.85)))
+                issues_found.append(("slate", ai_results.get("confidence", 0.85), "quick_ai"))
+                video_issue_found = True
             else:
                 # 3. If Moondream does NOT detect anything, fallback to heavier
                 # LLaVA for double check
                 fallback_ai_results = await analyze_frame_ai(frame_path, model="llava")
                 if fallback_ai_results.get("is_slate"):
-                    issues_found.append(("slate", fallback_ai_results.get("confidence", 0.85)))
+                    issues_found.append(("slate", fallback_ai_results.get("confidence", 0.85), "heavy_ai"))
+                    video_issue_found = True
 
-        if not issues_found:
-            issues_found.append(("ok", 1.0))
+        if len(issues_found) == 0:
+            issues_found.append(("ok", 1.0, "opencv"))
 
         # Add entries to DB
         # To simulate the network log requirement ("source, backbone, dest")
-        for issue_type, confidence in issues_found:
+        for issue_type, confidence, engine in issues_found:
             log_entry = VideoLog(
                 video_filename=video_filename,
                 timestamp_sec=timestamp_sec,
@@ -284,6 +312,7 @@ async def extract_and_analyze(video_filename: str):
                 node_dest="Distribution-Node",
                 issue_type=issue_type,
                 issue_score=confidence,
+                analysis_engine=engine,
                 thumbnail_path=frame_file
             )
             db.add(log_entry)

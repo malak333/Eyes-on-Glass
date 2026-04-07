@@ -57,7 +57,7 @@ export default function LogViewer({ logs, apiUrl }) {
                   style={{ width: '100%', maxHeight: '200px', objectFit: 'contain', display: 'block' }} 
                 />
                 <div style={{ padding: '0.5rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  Conf: {(log.issue_score * 100).toFixed(1)}% | Source: {log.node_source} | Edge: {log.node_dest}
+                  Engine: {log.analysis_engine || 'N/A'} | Conf: {(log.issue_score * 100).toFixed(1)}% | Source: {log.node_source} | Edge: {log.node_dest}
                 </div>
               </div>
             )}

@@ -1,6 +1,6 @@
 # Eyes on Glass
 
-**Eyes on Glass** is an AI-powered concept application that monitors video streams (e.g., `.ts`, `.mp4`) for visual/audio anomalies like lip-sync issues, macroblocking, pure black screens, and slates. Instead of monitoring the stream at a full 60 FPS, this application extracts an optimized subset of frames (1 FPS) for analysis, drastically improving performance while retaining fidelity, designed explicitly to run on local hardware (e.g., M1 Pro with 32GB of RAM).
+**Eyes on Glass** is an AI-powered concept application that monitors video streams (e.g., `.ts`, `.mp4`) for visual/audio anomalies like lip-sync issues, macroblocking, pure black screens, slates, and audio corruptions (like audio dropouts or severe buzzing audio). Instead of monitoring the stream at a full 60 FPS, this application extracts an optimized subset of frames (1 FPS) for analysis, drastically improving performance while retaining fidelity, designed explicitly to run on local hardware (e.g., M1 Pro with 32GB of RAM).
 
 ---
 
@@ -20,8 +20,9 @@ The platform architecture is highly localized and split into a React Frontend an
    - A robust **FastAPI** server orchestration pipeline. 
    - Receives video streams and executes a **Two-Tiered A/V Sync Test** analyzing the internal Presentation Time Stamps (PTS) via `ffprobe`, catching audio drift and multiplexing failures synchronously.
    - Delegates local processing to **FFmpeg**, which carves out 1 FPS frame thumbnails efficiently.
-   - Feeds extracted thumbnails sequentially into a **Cascading Verification Pipeline**, where OpenCV and FFmpeg instantly short-circuit and flag deterministic errors (like black screens, audio dropouts, or macroblocking).
-   - Only beautifully clean frames fall through to the **AI Analyzers**, which dynamically orchestrate a tiered approach using **Ollama Vision Language Models**: checking the lightweight **Moondream** model first for high-speed anomalous slate detection before defaulting to the heavier **LLaVA** model as a final assurance check.
+   - Feeds extracted thumbnails sequentially into a **Cascading Verification Pipeline**, where OpenCV and FFmpeg instantly short-circuit and flag deterministic errors across two independent, concurrent tracks. The Audio Track detects silencing and buzzing, while the Video Track spots macroblocking and black screens without interrupting the other.
+   - **Analysis Engine Tracking**: Every detected issue is securely tagged directly to the specific execution engine (`ffmpeg`, `opencv`, `quick_ai`, or `heavy_ai`) to grant engineers precise debugging observability.
+   - Only beautifully clean frames (free of CV-level video issues) fall through to the **AI Analyzers**, which dynamically orchestrate a tiered approach using **Ollama Vision Language Models**: checking the lightweight **Moondream** model first for high-speed anomalous slate detection before defaulting to the heavier **LLaVA** model as a final assurance check.
    - Implements an asynchronous system polling task using `psutil` and macOS `powermetrics` to stream live operational tracking back to the dashboard.
    - Automatically maintains real-time analysis progress state, proactively clearing stale DB logs and leftover thumbnail frames from duplicate file re-uploads to ensure accurate data reflection.
    - Natively verified via **Pytest** for fast operational safety checks without booting the entire stack.

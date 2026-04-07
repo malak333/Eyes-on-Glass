@@ -42,6 +42,8 @@ def test_get_logs():
     data = response.json()
     assert "logs" in data
     assert isinstance(data["logs"], list)
+    if len(data["logs"]) > 0:
+        assert "analysis_engine" in data["logs"][0]
 
 def test_upload_video():
     files = {"file": ("dummy.mp4", b"dummy content", "video/mp4")}

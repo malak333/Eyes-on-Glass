@@ -18,6 +18,7 @@ class VideoLog(Base):
     # e.g., 'black_screen', 'macroblocking', 'slate', 'no_audio', 'ok'
     issue_type = Column(String, index=True)
     issue_score = Column(Float)                # Confidence or severity score
+    analysis_engine = Column(String)           # e.g., 'ffmpeg', 'opencv', 'quick_ai', 'heavy_ai'
     thumbnail_path = Column(String)            # Path to saved frame image
     created_at = Column(DateTime, default=datetime.utcnow)
 

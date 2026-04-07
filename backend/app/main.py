@@ -89,6 +89,7 @@ def get_logs(db: Session = Depends(get_db)):
             "node_dest": log.node_dest,
             "issue_type": log.issue_type,
             "issue_score": log.issue_score,
+            "analysis_engine": log.analysis_engine,
             "thumbnail_url": f"/thumbnails/{log.thumbnail_path}" if log.thumbnail_path else None,
             "created_at": log.created_at.isoformat() if log.created_at else None
         })
