@@ -1,6 +1,11 @@
 from fastapi.testclient import TestClient
-from app.main import app
 import pytest
+from app.main import app
+from db.database import init_db
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_database():
+    init_db()
 
 client = TestClient(app)
 
