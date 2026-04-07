@@ -2,6 +2,7 @@ import os
 import asyncio
 import ffmpeg
 import re
+import time
 from db.database import SessionLocal, VideoLog
 from core.analyzers.cv_analyzer import analyze_frame
 from core.analyzers.ai_analyzer import analyze_frame_ai
@@ -172,13 +173,15 @@ async def detect_silence(video_path: str):
 
 
 async def extract_and_analyze(video_filename: str):
+    start_time = time.time()
     analysis_progress[video_filename] = {
-        "status": "extracting", "current": 0, "total": 0}
+        "status": "extracting", "current": 0, "total": 0, "start_time": start_time}
 
     video_path = os.path.join(UPLOADS_DIR, video_filename)
     if not os.path.exists(video_path):
         print(f"Video file not found: {video_path}")
         analysis_progress[video_filename]["status"] = "error"
+        analysis_progress[video_filename]["total_time"] = round(time.time() - start_time, 2)
         return
 
     # Probe video to get duration
@@ -187,6 +190,8 @@ async def extract_and_analyze(video_filename: str):
         duration = float(probe['format']['duration'])
     except Exception as e:
         print(f"Error probing video {video_path}: {e}")
+        analysis_progress[video_filename]["status"] = "error"
+        analysis_progress[video_filename]["total_time"] = round(time.time() - start_time, 2)
         return
 
     # For MVP, we will extract 1 frame per second
@@ -224,6 +229,7 @@ async def extract_and_analyze(video_filename: str):
     except ffmpeg.Error as e:
         print(f"Ffmpeg error: {e}")
         analysis_progress[video_filename]["status"] = "error"
+        analysis_progress[video_filename]["total_time"] = round(time.time() - start_time, 2)
         return
 
     # Detect audio dropouts using async ffmpeg process
@@ -261,6 +267,7 @@ async def extract_and_analyze(video_filename: str):
             0.0, 1.0 - (cv_results.get("laplacian_variance", 50.0) / 50.0))
 
         is_black = cv_results.get("is_black_screen")
+        has_top_artifact = cv_results.get("has_top_artifact")
 
         # Track audio and video issues independently to ensure AI runs even if audio fails
         if is_silent:
@@ -281,6 +288,10 @@ async def extract_and_analyze(video_filename: str):
 
             if has_lip_sync_issue:
                 issues_found.append(("lip_sync", 0.95, "ffmpeg"))
+                video_issue_found = True
+
+            if has_top_artifact:
+                issues_found.append(("top_artifact", 1.0, "opencv"))
                 video_issue_found = True
 
         if not video_issue_found:
@@ -321,4 +332,5 @@ async def extract_and_analyze(video_filename: str):
 
     db.close()
     analysis_progress[video_filename]["status"] = "completed"
+    analysis_progress[video_filename]["total_time"] = round(time.time() - start_time, 2)
     print(f"Finished processing {video_filename}")

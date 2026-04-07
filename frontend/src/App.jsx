@@ -8,6 +8,21 @@ import { Activity, ShieldAlert, CheckCircle, RefreshCcw } from 'lucide-react';
 
 const API_URL = "http://localhost:8000";
 
+const Timer = ({ startTime }) => {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!startTime) return;
+    const interval = setInterval(() => {
+      setElapsed(Date.now() / 1000 - startTime);
+    }, 100);
+    setElapsed(Date.now() / 1000 - startTime);
+    return () => clearInterval(interval);
+  }, [startTime]);
+
+  return <span>{Math.max(0, elapsed).toFixed(1)}s</span>;
+};
+
 function App() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -118,15 +133,27 @@ function App() {
         </section>
       )}
 
-      {activeTab === 'active' && processingFile && progressData[processingFile] && progressData[processingFile].status !== 'completed' && progressData[processingFile].status !== 'error' && (
+      {activeTab === 'active' && processingFile && progressData[processingFile] && progressData[processingFile].status !== 'error' && (
         <section className="glass-panel animate-fade-in" style={{marginBottom: '2rem'}}>
           <h2 style={{marginTop: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-            <Activity size={20} className="spinning" color="var(--primary-color)" /> Analyzing: <span style={{color: 'var(--primary-color)'}}>{processingFile}</span>
+            {progressData[processingFile].status === 'completed' ? (
+              <CheckCircle size={20} color="var(--primary-color)" />
+            ) : (
+              <Activity size={20} className="spinning" color="var(--primary-color)" />
+            )}
+            Analysis: <span style={{color: 'var(--primary-color)'}}>{processingFile}</span>
           </h2>
           <div style={{background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '1rem'}}>
             <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem'}}>
               <span>Status: <strong style={{textTransform: 'capitalize', color: 'var(--text-main)'}}>{progressData[processingFile].status}</strong></span>
-              <span>{progressData[processingFile].current} / {progressData[processingFile].total} Frames Processed</span>
+              <span>
+                {progressData[processingFile].status === 'completed' && progressData[processingFile].total_time ? (
+                  <>Time Taken: {progressData[processingFile].total_time}s &bull; </>
+                ) : progressData[processingFile].start_time && progressData[processingFile].status !== 'completed' ? (
+                  <>Elapsed Time: <Timer startTime={progressData[processingFile].start_time} /> &bull; </>
+                ) : null}
+                {progressData[processingFile].current} / {progressData[processingFile].total} Frames Processed
+              </span>
             </div>
             <div style={{width: '100%', background: 'rgba(255,255,255,0.1)', height: '12px', borderRadius: '6px', overflow: 'hidden'}}>
               <div style={{

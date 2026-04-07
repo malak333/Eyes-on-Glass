@@ -28,9 +28,19 @@ def analyze_frame(frame_path: str) -> dict:
     # potential issue
     is_blurry = laplacian_var < 50.0
 
+    # 3. Top Artifact Detection
+    # Look for unnatural artifacts (like VANC lines, tearing, macroblocking) 
+    # at the very top of the frame.
+    top_region = gray[0:10, :]
+    top_laplacian_var = cv2.Laplacian(top_region, cv2.CV_64F).var()
+    # Flag if the top region is abnormally noisy compared to the rest of the frame
+    # or if the screen is black but the top is not.
+    has_top_artifact = bool(top_laplacian_var > 200.0 and (top_laplacian_var > laplacian_var * 5 or is_black_screen))
+
     return {
         "mean_brightness": float(mean_brightness),
         "is_black_screen": bool(is_black_screen),
         "laplacian_variance": float(laplacian_var),
-        "is_blurry": bool(is_blurry)
+        "is_blurry": bool(is_blurry),
+        "has_top_artifact": has_top_artifact
     }

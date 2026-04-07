@@ -9,9 +9,8 @@ from core.video_pipeline import extract_and_analyze, analysis_progress, UPLOADS_
 from app.system_monitor import resource_monitor_task, get_aggregated_stats
 import httpx
 
+import time
 from contextlib import asynccontextmanager
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -54,7 +53,7 @@ async def upload_video(
     # Pre-set progress to 'extracting' immediately so the frontend knows
     # processing started
     analysis_progress[file.filename] = {
-        "status": "extracting", "current": 0, "total": 0}
+        "status": "extracting", "current": 0, "total": 0, "start_time": time.time()}
 
     # Clear old database logs if this file is being re-uploaded
     from db.database import SessionLocal
