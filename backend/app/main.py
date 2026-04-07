@@ -9,7 +9,17 @@ from core.video_pipeline import extract_and_analyze, analysis_progress, UPLOADS_
 from app.system_monitor import resource_monitor_task, get_aggregated_stats
 import httpx
 
-app = FastAPI(title="Eyes on Glass - AI Video Monitoring API")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    asyncio.create_task(resource_monitor_task())
+    yield
+
+
+
+app = FastAPI(title="Eyes on Glass - AI Video Monitoring API", lifespan=lifespan)
 
 # Allow CORS for Vite frontend
 app.add_middleware(
@@ -24,43 +34,49 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
 # Mount thumbnails to serve them to the frontend
-app.mount("/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
+app.mount(
+    "/thumbnails",
+    StaticFiles(
+        directory=THUMBNAILS_DIR),
+    name="thumbnails")
 
-@app.on_event("startup")
-async def on_startup():
-    init_db()
-    asyncio.create_task(resource_monitor_task())
 
 @app.post("/upload")
-async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_video(
+        background_tasks: BackgroundTasks,
+        file: UploadFile = File(...)):
     """Uploads a .ts or .mp4 file and begins the AI processing pipeline."""
     file_path = os.path.join(UPLOADS_DIR, file.filename)
-    
+
     with open(file_path, "wb") as buffer:
         buffer.write(await file.read())
-        
-    # Pre-set progress to 'extracting' immediately so the frontend knows processing started
-    analysis_progress[file.filename] = {"status": "extracting", "current": 0, "total": 0}
+
+    # Pre-set progress to 'extracting' immediately so the frontend knows
+    # processing started
+    analysis_progress[file.filename] = {
+        "status": "extracting", "current": 0, "total": 0}
 
     # Clear old database logs if this file is being re-uploaded
     from db.database import SessionLocal
     db = SessionLocal()
     try:
-        db.query(VideoLog).filter(VideoLog.video_filename == file.filename).delete()
+        db.query(VideoLog).filter(
+            VideoLog.video_filename == file.filename).delete()
         db.commit()
     finally:
         db.close()
-    
+
     # Trigger background processing
     background_tasks.add_task(extract_and_analyze, file.filename)
-    
+
     return {"message": f"Successfully uploaded {file.filename}. Processing started."}
+
 
 @app.get("/logs")
 def get_logs(db: Session = Depends(get_db)):
     """Retrieves the aggregated 'source, backbone, dest' frame logs."""
     logs = db.query(VideoLog).order_by(VideoLog.timestamp_sec.asc()).all()
-    
+
     # Process into nice JSON output
     output = []
     for log in logs:
@@ -78,6 +94,7 @@ def get_logs(db: Session = Depends(get_db)):
         })
     return {"logs": output}
 
+
 @app.get("/stats")
 def get_stats(db: Session = Depends(get_db)):
     """Retrieves macro stats for the dashboard."""
@@ -85,20 +102,22 @@ def get_stats(db: Session = Depends(get_db)):
     total_frames = len(logs)
     if total_frames == 0:
         return {"total_frames": 0, "issues_count": 0, "health_score": 100}
-        
-    issues_count = len([l for l in logs if l.issue_type != "ok"])
+
+    issues_count = len([log_entry for log_entry in logs if log_entry.issue_type != "ok"])
     health_score = max(0, 100 - (issues_count / total_frames * 100))
-    
+
     return {
         "total_frames": total_frames,
         "issues_count": issues_count,
         "health_score": round(health_score, 2)
     }
 
+
 @app.get("/system/resources")
 def get_system_resources():
     """Retrieves the aggregated system resource usage over time."""
     return get_aggregated_stats()
+
 
 @app.get("/system/ollama_status")
 async def check_ollama_status():
@@ -112,10 +131,12 @@ async def check_ollama_status():
         pass
     return {"status": "stopped"}
 
+
 @app.get("/progress")
 def get_progress():
     """Retrieves the analysis progress dictionary."""
     return analysis_progress
+
 
 if __name__ == "__main__":
     import uvicorn

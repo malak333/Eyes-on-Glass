@@ -23,7 +23,7 @@ const SystemResources = ({ apiUrl }) => {
         const res = await fetch(`${apiUrl}/system/ollama_status`);
         const json = await res.json();
         setOllamaStatus(json.status);
-      } catch (err) {
+      } catch {
         setOllamaStatus("stopped");
       }
     };

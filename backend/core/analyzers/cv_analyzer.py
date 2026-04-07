@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+
 def analyze_frame(frame_path: str) -> dict:
     """
     Analyzes a saved frame using traditional CV techniques.
@@ -22,8 +23,9 @@ def analyze_frame(frame_path: str) -> dict:
     # 2. Blur / Macroblocking rough estimation
     # Laplacian variance is a common way to measure blur/focus
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-    # High compression/macroblocking often results in either very low variance (blur) 
-    # or artificial high variance on edges. We will flag low variance as a potential issue
+    # High compression/macroblocking often results in either very low variance (blur)
+    # or artificial high variance on edges. We will flag low variance as a
+    # potential issue
     is_blurry = laplacian_var < 50.0
 
     return {
