@@ -11,6 +11,8 @@ import httpx
 
 import time
 from contextlib import asynccontextmanager
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
