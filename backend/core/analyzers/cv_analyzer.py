@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+
 def calculate_blockiness(gray) -> float:
     h, w = gray.shape
     if h < 16 or w < 16:
@@ -8,16 +9,16 @@ def calculate_blockiness(gray) -> float:
 
     gray_f = gray.astype(np.float32)
     max_blockiness = 1.0
-    
+
     # Horizontal diffs
     h_diff = np.abs(gray_f[:, 1:] - gray_f[:, :-1])
     col_diffs = np.mean(h_diff, axis=0)
-    
+
     # Try popular block sizes: 8 and 16
     for block_size in [8, 16]:
         boundary_cols = np.arange(block_size - 1, w - 1, block_size)
         non_boundary_cols = np.setdiff1d(np.arange(w - 1), boundary_cols)
-        
+
         if len(boundary_cols) > 0 and len(non_boundary_cols) > 0:
             boundary_mean = np.mean(col_diffs[boundary_cols])
             non_boundary_mean = np.mean(col_diffs[non_boundary_cols])
@@ -27,17 +28,17 @@ def calculate_blockiness(gray) -> float:
     # Vertical diffs
     v_diff = np.abs(gray_f[1:, :] - gray_f[:-1, :])
     row_diffs = np.mean(v_diff, axis=1)
-    
+
     for block_size in [8, 16]:
         boundary_rows = np.arange(block_size - 1, h - 1, block_size)
         non_boundary_rows = np.setdiff1d(np.arange(h - 1), boundary_rows)
-        
+
         if len(boundary_rows) > 0 and len(non_boundary_rows) > 0:
             boundary_mean_v = np.mean(row_diffs[boundary_rows])
             non_boundary_mean_v = np.mean(row_diffs[non_boundary_rows])
             b_v = boundary_mean_v / (non_boundary_mean_v + 1e-5)
             max_blockiness = max(max_blockiness, b_v)
-            
+
     return float(max_blockiness)
 
 
@@ -69,13 +70,14 @@ def analyze_frame(frame_path: str) -> dict:
     blockiness = calculate_blockiness(gray)
 
     # 3. Top Artifact Detection
-    # Look for unnatural artifacts (like VANC lines, tearing, macroblocking) 
+    # Look for unnatural artifacts (like VANC lines, tearing, macroblocking)
     # at the very top of the frame.
     top_region = gray[0:10, :]
     top_laplacian_var = cv2.Laplacian(top_region, cv2.CV_64F).var()
     # Flag if the top region is abnormally noisy compared to the rest of the frame
     # or if the screen is black but the top is not.
-    has_top_artifact = bool(top_laplacian_var > 200.0 and (top_laplacian_var > laplacian_var * 5 or is_black_screen))
+    has_top_artifact = bool(top_laplacian_var > 200.0 and (
+        top_laplacian_var > laplacian_var * 5 or is_black_screen))
 
     return {
         "mean_brightness": float(mean_brightness),
