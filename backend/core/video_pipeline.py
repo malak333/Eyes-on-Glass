@@ -3,6 +3,8 @@ import asyncio
 import ffmpeg
 import re
 import time
+import wave
+import struct
 from db.database import SessionLocal, VideoLog
 from core.analyzers.cv_analyzer import analyze_frame
 from core.analyzers.ai_analyzer import analyze_frame_ai
@@ -62,7 +64,8 @@ async def detect_pts_offset(video_path: str, threshold: float = 0.1) -> bool:
 
         if v_start is not None and a_start is not None:
             offset = abs(v_start - a_start)
-            if offset > threshold:
+            active_threshold = 2.0 if video_path.lower().endswith('.ts') else threshold
+            if offset > active_threshold:
                 print(f"Container PTS offset detected: {offset}s")
                 return True
     except Exception as e:
@@ -137,6 +140,62 @@ async def detect_audio_anomalies(
             print(f"Error parsing buzzing audio detection: {e}")
 
     return has_static, has_buzzing
+
+
+async def detect_audio_clicks(video_path: str) -> bool:
+    """
+    Detects audio clicking using discrete volume jump analysis.
+    """
+    
+    wav_path = "/tmp/audio_click_detect.wav"
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-vn", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "44100",
+        wav_path, "-y", "-v", "quiet"
+    ]
+    
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    await process.communicate()
+    
+    if not os.path.exists(wav_path):
+        return False
+        
+    try:
+        with wave.open(wav_path, 'rb') as w:
+            n_frames = w.getnframes()
+            if n_frames == 0:
+                return False
+            frames = w.readframes(n_frames)
+            data = struct.unpack(f"<{n_frames}h", frames)
+            
+        diffs = [abs(data[i] - data[i-1]) for i in range(1, len(data))]
+        if not diffs:
+            return False
+            
+        mean_diff = sum(diffs) / len(diffs)
+        var_diff = sum((d - mean_diff)**2 for d in diffs) / len(diffs)
+        std_diff = var_diff ** 0.5
+        
+        clicks = [d for d in diffs if d > mean_diff + 20 * std_diff]
+        max_diff = max(diffs) if diffs else 0
+        
+        if len(clicks) > 10 and max_diff > 2000 and (max_diff / (mean_diff + 1e-5)) > 100:
+            print(f"Audio clicking detected: {len(clicks)} clicks, max diff {max_diff}")
+            return True
+    except Exception as e:
+        print(f"Error detecting audio clicks: {e}")
+    finally:
+        if os.path.exists(wav_path):
+            try:
+                os.remove(wav_path)
+            except Exception:
+                pass
+                
+    return False
 
 
 async def detect_silence(video_path: str):
@@ -239,6 +298,9 @@ async def extract_and_analyze(video_filename: str):
     # Detect static and buzzing audio
     has_static_audio, has_buzzing_audio = await detect_audio_anomalies(video_path)
 
+    # Detect audio clicks
+    has_clicking_audio = await detect_audio_clicks(video_path)
+
     # Now, process the extracted frames
     # Count generated frames
     frame_files = sorted([f for f in os.listdir(
@@ -266,7 +328,7 @@ async def extract_and_analyze(video_filename: str):
                 end in silence_intervals)
     
             blockiness = cv_results.get("blockiness", 1.0)
-            macro_confidence = min(1.0, max(0.0, (blockiness - 1.05) / 0.25))
+            macro_confidence = min(1.0, max(0.0, (blockiness - 1.35) / 0.5))
     
             is_black = cv_results.get("is_black_screen")
             has_top_artifact = cv_results.get("has_top_artifact")
@@ -278,6 +340,8 @@ async def extract_and_analyze(video_filename: str):
                 issues_found.append(("buzzing_audio", 1.0, "ffmpeg"))
             if has_static_audio:
                 issues_found.append(("static_audio", 1.0, "ffmpeg"))
+            if has_clicking_audio:
+                issues_found.append(("clicking_audio", 1.0, "ffmpeg"))
     
             video_issue_found = False
             if is_black:

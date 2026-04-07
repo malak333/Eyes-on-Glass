@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
-from core.video_pipeline import extract_and_analyze, detect_pts_offset, detect_lip_sync_ai, detect_silence, detect_audio_anomalies
+from core.video_pipeline import extract_and_analyze, detect_pts_offset, detect_lip_sync_ai, detect_silence, detect_audio_anomalies, detect_audio_clicks
 
 
 @pytest.mark.asyncio
@@ -70,8 +70,36 @@ async def test_detect_audio_anomalies_buzzing(mock_create_exec):
 
 
 @pytest.mark.asyncio
+@patch("core.video_pipeline.asyncio.create_subprocess_exec")
+@patch("core.video_pipeline.os.path.exists")
+@patch("core.video_pipeline.wave.open")
+async def test_detect_audio_clicks(mock_wave_open, mock_exists, mock_create_exec):
+    mock_exists.return_value = True
+    
+    mock_wave = mock_wave_open.return_value.__enter__.return_value
+    mock_wave.getnframes.return_value = 100
+    
+    import struct
+    # Create fake frames data to simulate clicks
+    mock_data = [10] * 50000
+    for i in range(12):
+        mock_data[i * 50] = 5000
+        
+    mock_wave.getnframes.return_value = len(mock_data)
+    frames = struct.pack(f"<{len(mock_data)}h", *mock_data)
+    mock_wave.readframes.return_value = frames
+    
+    mock_process = AsyncMock()
+    mock_create_exec.return_value = mock_process
+    
+    res = await detect_audio_clicks("test.mp4")
+    assert res is True
+
+
+@pytest.mark.asyncio
 @patch("core.video_pipeline.analyze_frame")
 @patch("core.video_pipeline.analyze_frame_ai")
+@patch("core.video_pipeline.detect_audio_clicks", new_callable=AsyncMock)
 @patch("core.video_pipeline.detect_audio_anomalies", new_callable=AsyncMock)
 @patch("core.video_pipeline.detect_silence", new_callable=AsyncMock)
 @patch("core.video_pipeline.detect_pts_offset", new_callable=AsyncMock)
@@ -79,7 +107,7 @@ async def test_detect_audio_anomalies_buzzing(mock_create_exec):
 @patch("core.video_pipeline.os.path.exists")
 @patch("core.video_pipeline.os.listdir")
 async def test_performance_ai_sampling(
-    mock_listdir, mock_exists, mock_ffmpeg, mock_pts, mock_silence, mock_audio, 
+    mock_listdir, mock_exists, mock_ffmpeg, mock_pts, mock_silence, mock_audio, mock_audio_clicks,
     mock_analyze_ai, mock_analyze_frame
 ):
     import time
@@ -92,6 +120,7 @@ async def test_performance_ai_sampling(
     mock_pts.return_value = False
     mock_silence.return_value = []
     mock_audio.return_value = (False, False)
+    mock_audio_clicks.return_value = False
     
     # Mock 20 frames
     mock_listdir.return_value = [f"test_video.mp4_frame_{str(i).zfill(4)}.jpg" for i in range(20)]
@@ -125,6 +154,7 @@ async def test_performance_ai_sampling(
 @patch("core.video_pipeline.SessionLocal")
 @patch("core.video_pipeline.analyze_frame")
 @patch("core.video_pipeline.analyze_frame_ai")
+@patch("core.video_pipeline.detect_audio_clicks", new_callable=AsyncMock)
 @patch("core.video_pipeline.detect_audio_anomalies", new_callable=AsyncMock)
 @patch("core.video_pipeline.detect_silence", new_callable=AsyncMock)
 @patch("core.video_pipeline.detect_pts_offset", new_callable=AsyncMock)
@@ -132,7 +162,7 @@ async def test_performance_ai_sampling(
 @patch("core.video_pipeline.os.path.exists")
 @patch("core.video_pipeline.os.listdir")
 async def test_multiple_anomalies_recorded(
-    mock_listdir, mock_exists, mock_ffmpeg, mock_pts, mock_silence, mock_audio, 
+    mock_listdir, mock_exists, mock_ffmpeg, mock_pts, mock_silence, mock_audio, mock_audio_clicks,
     mock_analyze_ai, mock_analyze_frame, mock_session
 ):
     mock_exists.return_value = True
@@ -145,6 +175,7 @@ async def test_multiple_anomalies_recorded(
     mock_silence.return_value = []
     # Both static and buzzing audio detect as True
     mock_audio.return_value = (True, True)
+    mock_audio_clicks.return_value = False
     
     # Mock 1 frame
     mock_listdir.return_value = [f"test_video.mp4_frame_0000.jpg"]
