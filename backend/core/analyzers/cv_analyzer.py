@@ -55,16 +55,20 @@ def analyze_frame(frame_path: str) -> dict:
     # Convert to grayscale for most metrics
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Black Screen Detection
-    # Calculate Root Mean Square contrast or simple mean brightness
+    # 1. Standard Dev (Global Contrast)
+    std_dev = np.std(gray)
+
+    # 2. Black Screen Detection
+    # Calculate simple mean brightness
     mean_brightness = np.mean(gray)
     is_black_screen = mean_brightness < 5.0  # Threshold out of 255
 
-    # 2. Blur / Macroblocking rough estimation
+    # 3. Blur / Macroblocking rough estimation
     # Laplacian variance is a common way to measure blur/focus
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-    # Blur results in very low variance
-    is_blurry = laplacian_var < 50.0
+    
+    # Blur results in very low variance. But pure black/solid colors also do.
+    is_blurry = bool(laplacian_var < 5.0 and std_dev > 10.0)
 
     # Macroblocking blockiness metric
     blockiness = calculate_blockiness(gray)
@@ -76,8 +80,21 @@ def analyze_frame(frame_path: str) -> dict:
     top_laplacian_var = cv2.Laplacian(top_region, cv2.CV_64F).var()
     # Flag if the top region is abnormally noisy compared to the rest of the frame
     # or if the screen is black but the top is not.
-    has_top_artifact = bool(top_laplacian_var > 200.0 and (
+    has_top_artifact = bool(top_laplacian_var > 1000.0 and (
         top_laplacian_var > laplacian_var * 5 or is_black_screen))
+
+    # 4. Color Bars detection (SMPTE)
+    grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    var_x = np.var(grad_x)
+    var_y = np.var(grad_y)
+    # Perfect color bars have strong vertical boundaries (high var_x) and almost no horizontal boundaries (low var_y)
+    is_bars = bool((var_y < 500.0) and (var_x > 1000.0) and (var_x > var_y * 10))
+
+    # 5. Snowflakes / Static Video
+    std_dev = np.std(gray)
+    # Snowflakes typically have very high variance/noise (laplacian > 5000), uniform-like huge std_dev, and NO blockiness.
+    is_snowflakes = bool(std_dev > 30.0 and laplacian_var > 4000.0 and blockiness < 1.3)
 
     return {
         "mean_brightness": float(mean_brightness),
@@ -85,5 +102,7 @@ def analyze_frame(frame_path: str) -> dict:
         "laplacian_variance": float(laplacian_var),
         "is_blurry": bool(is_blurry),
         "blockiness": float(blockiness),
-        "has_top_artifact": has_top_artifact
+        "has_top_artifact": has_top_artifact,
+        "is_bars": is_bars,
+        "is_snowflakes": is_snowflakes
     }

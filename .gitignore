@@ -34,3 +34,6 @@ Thumbs.db
 
 # Temp files
 test_pipeline.py
+
+# Test Results
+battery-test-results/

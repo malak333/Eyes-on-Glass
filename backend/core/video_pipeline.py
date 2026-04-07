@@ -64,7 +64,9 @@ async def detect_pts_offset(video_path: str, threshold: float = 0.1) -> bool:
 
         if v_start is not None and a_start is not None:
             offset = abs(v_start - a_start)
-            active_threshold = 2.0 if video_path.lower().endswith('.ts') else threshold
+            # Lip sync errors usually visible > 0.1s. Broadcasts can be slightly off.
+            # Using 0.25s threshold for all files to be safe
+            active_threshold = 0.25
             if offset > active_threshold:
                 print(f"Container PTS offset detected: {offset}s")
                 return True
@@ -99,6 +101,7 @@ async def detect_audio_anomalies(
     """
     cmd = [
         "ffmpeg", "-i", video_path,
+        "-vn",
         "-map", "0:a:0?",  # use first audio stream if it exists
         "-af", "astats",
         "-f", "null", "-"
@@ -165,23 +168,26 @@ async def detect_audio_clicks(video_path: str) -> bool:
         return False
 
     try:
+        import numpy as np
         with wave.open(wav_path, 'rb') as w:
             n_frames = w.getnframes()
             if n_frames == 0:
                 return False
             frames = w.readframes(n_frames)
-            data = struct.unpack(f"<{n_frames}h", frames)
+            # Use numpy for rapid computation
+            data = np.frombuffer(frames, dtype=np.int16)
 
-        diffs = [abs(data[i] - data[i-1]) for i in range(1, len(data))]
-        if not diffs:
+        if len(data) < 2:
             return False
 
-        mean_diff = sum(diffs) / len(diffs)
-        var_diff = sum((d - mean_diff)**2 for d in diffs) / len(diffs)
-        std_diff = var_diff ** 0.5
-
-        clicks = [d for d in diffs if d > mean_diff + 20 * std_diff]
-        max_diff = max(diffs) if diffs else 0
+        data_f = data.astype(np.float32)
+        diffs = np.abs(np.diff(data_f))
+        
+        mean_diff = np.mean(diffs)
+        std_diff = np.std(diffs)
+        
+        clicks = diffs[diffs > mean_diff + 20 * std_diff]
+        max_diff = np.max(diffs) if len(diffs) > 0 else 0
 
         if len(clicks) > 10 and max_diff > 2000 and (max_diff / (mean_diff + 1e-5)) > 100:
             print(f"Audio clicking detected: {len(clicks)} clicks, max diff {max_diff}")
@@ -201,6 +207,7 @@ async def detect_audio_clicks(video_path: str) -> bool:
 async def detect_silence(video_path: str):
     cmd = [
         "ffmpeg", "-i", video_path,
+        "-vn",
         "-af", "silencedetect=noise=-30dB:d=0.5",
         "-f", "null", "-"
     ]
@@ -229,6 +236,40 @@ async def detect_silence(video_path: str):
             current_start = None
 
     return silence_intervals
+
+
+async def detect_freeze(video_path: str):
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-an",
+        "-vf", "freezedetect=n=-60dB:d=2.0",
+        "-f", "null", "-"
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    _, stderr = await process.communicate()
+    stderr_str = stderr.decode()
+
+    freeze_intervals = []
+    start_pattern = re.compile(r"lavfi\.freezedetect\.freeze_start: ([\d\.]+)")
+    end_pattern = re.compile(r"lavfi\.freezedetect\.freeze_end: ([\d\.]+)")
+
+    current_start = None
+    for line in stderr_str.split('\n'):
+        start_match = start_pattern.search(line)
+        if start_match:
+            current_start = float(start_match.group(1))
+
+        end_match = end_pattern.search(line)
+        if end_match and current_start is not None:
+            end_time = float(end_match.group(1))
+            freeze_intervals.append((current_start, end_time))
+            current_start = None
+
+    return freeze_intervals
 
 
 async def extract_and_analyze(video_filename: str):
@@ -295,6 +336,10 @@ async def extract_and_analyze(video_filename: str):
     silence_intervals = await detect_silence(video_path)
     print(f"Detected silence intervals: {silence_intervals}")
 
+    # Detect frozen video intervals
+    freeze_intervals = await detect_freeze(video_path)
+    print(f"Detected freeze intervals: {freeze_intervals}")
+
     # Detect static and buzzing audio
     has_static_audio, has_buzzing_audio = await detect_audio_anomalies(video_path)
 
@@ -327,8 +372,12 @@ async def extract_and_analyze(video_filename: str):
                 start <= timestamp_sec <= end for start,
                 end in silence_intervals)
 
+            is_frozen = any(
+                start <= timestamp_sec <= end for start,
+                end in freeze_intervals)
+
             blockiness = cv_results.get("blockiness", 1.0)
-            macro_confidence = min(1.0, max(0.0, (blockiness - 1.35) / 0.5))
+            macro_confidence = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
 
             is_black = cv_results.get("is_black_screen")
             has_top_artifact = cv_results.get("has_top_artifact")
@@ -348,11 +397,23 @@ async def extract_and_analyze(video_filename: str):
                 issues_found.append(("black_screen", 1.0, "opencv"))
                 video_issue_found = True
             else:
+                if is_frozen:
+                    issues_found.append(("frozen_screen", 1.0, "ffmpeg"))
+                    video_issue_found = True
+
+                if cv_results.get("is_bars"):
+                    issues_found.append(("bars_and_tone", 1.0, "opencv"))
+                    video_issue_found = True
+
+                if cv_results.get("is_snowflakes"):
+                    issues_found.append(("snowflakes", 1.0, "opencv"))
+                    video_issue_found = True
+
                 if cv_results.get("is_blurry"):
                     issues_found.append(("blur", 1.0, "opencv"))
                     video_issue_found = True
 
-                if macro_confidence >= 0.80:
+                if macro_confidence >= 0.80 and cv_results.get("laplacian_variance", 0) > 300.0:
                     issues_found.append(("macroblocking", round(macro_confidence, 2), "opencv"))
                     video_issue_found = True
 

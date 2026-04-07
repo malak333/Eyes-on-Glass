@@ -82,6 +82,7 @@ A solid testing baseline exists for both the React dashboard and the FastAPI orc
 To locally verify project fidelity:
 - **Backend Test Suite**: `cd backend && source .venv/bin/activate && PYTHONPATH=. pytest tests/`
 - **Frontend Test Suite**: `cd frontend && npm test`
+- **End-to-End Battery Test**: `cd backend && source .venv/bin/activate && PYTHONPATH=. python tests/run_video_battery.py`
 
 ---
 
