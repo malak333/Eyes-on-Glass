@@ -39,6 +39,18 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     with open(file_path, "wb") as buffer:
         buffer.write(await file.read())
         
+    # Pre-set progress to 'extracting' immediately so the frontend knows processing started
+    analysis_progress[file.filename] = {"status": "extracting", "current": 0, "total": 0}
+
+    # Clear old database logs if this file is being re-uploaded
+    from db.database import SessionLocal
+    db = SessionLocal()
+    try:
+        db.query(VideoLog).filter(VideoLog.video_filename == file.filename).delete()
+        db.commit()
+    finally:
+        db.close()
+    
     # Trigger background processing
     background_tasks.add_task(extract_and_analyze, file.filename)
     
@@ -61,7 +73,8 @@ def get_logs(db: Session = Depends(get_db)):
             "node_dest": log.node_dest,
             "issue_type": log.issue_type,
             "issue_score": log.issue_score,
-            "thumbnail_url": f"/thumbnails/{log.thumbnail_path}" if log.thumbnail_path else None
+            "thumbnail_url": f"/thumbnails/{log.thumbnail_path}" if log.thumbnail_path else None,
+            "created_at": log.created_at.isoformat() if log.created_at else None
         })
     return {"logs": output}
 

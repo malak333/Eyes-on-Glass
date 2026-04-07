@@ -62,7 +62,7 @@ function App() {
   });
   const activeFilename = processingFile || (filenames.length > 0 ? filenames[filenames.length - 1] : null);
   const currentFilename = activeTab === 'active' ? activeFilename : selectedHistory;
-  const currentLogs = currentFilename ? logsByFile[currentFilename] : [];
+  const currentLogs = currentFilename ? (logsByFile[currentFilename] || []) : [];
 
   const calculateStats = (streamLogs) => {
     const total_frames = streamLogs.length;
@@ -99,13 +99,20 @@ function App() {
           {filenames.length > 0 && filenames.length <= 1 && <p style={{color: 'var(--text-muted)'}}>No older analysis available yet.</p>}
           {filenames.length > 1 && (
             <ul style={{listStyle: 'none', padding: 0, display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))'}}>
-              {filenames.filter(f => f !== activeFilename).reverse().map(file => (
+              {filenames.filter(f => f !== activeFilename).reverse().map(file => {
+                const fileLogs = logsByFile[file];
+                const createdAt = fileLogs && fileLogs.length > 0 && fileLogs[0].created_at 
+                  ? new Date(fileLogs[0].created_at).toLocaleString() 
+                  : '';
+                return (
                 <li key={file}>
-                  <button className="btn" style={{width: '100%', justifyContent: 'flex-start'}} onClick={() => setSelectedHistory(file)}>
-                    📄 {file}
+                  <button className="btn" style={{width: '100%', justifyContent: 'space-between'}} onClick={() => setSelectedHistory(file)}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>📄 {file}</span>
+                    {createdAt && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{createdAt}</span>}
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </section>
@@ -187,6 +194,23 @@ function App() {
                 <li>🟢 Edge Dest: {currentLogs[0]?.node_dest}</li>
               </ul>
             ) : <p style={{fontSize: '0.85rem'}}>Awaiting stream...</p>}
+          </div>
+
+          <div style={{ marginTop: '1rem', background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--surface-border)' }}>
+            <h3 style={{marginTop: 0, fontSize: '0.9rem', color: 'var(--primary-color)'}}>Analysis Breakdown</h3>
+            {currentLogs.length > 0 ? (
+              <ul style={{listStyle: 'none', padding: 0, fontSize: '0.85rem', color: 'var(--text-muted)'}}>
+                {Object.entries(currentLogs.reduce((acc, log) => {
+                  acc[log.issue_type] = (acc[log.issue_type] || 0) + 1;
+                  return acc;
+                }, {})).sort((a,b) => b[1] - a[1]).map(([type, count]) => (
+                  <li key={type} style={{marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                    <span style={{textTransform: 'capitalize'}}>{type.replace('_', ' ')}</span>
+                    <span style={{background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '12px'}}>{count} frames</span>
+                  </li>
+                ))}
+              </ul>
+            ) : <p style={{fontSize: '0.85rem'}}>Awaiting analysis...</p>}
           </div>
         </div>
       </section>

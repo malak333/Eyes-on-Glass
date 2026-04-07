@@ -1,7 +1,7 @@
 import httpx
 import base64
 
-async def analyze_frame_ai(frame_path: str) -> dict:
+async def analyze_frame_ai(frame_path: str, model: str = "moondream") -> dict:
     """
     Calls a local Ollama instance (e.g., llava or moondream) to detect slates or complex issues.
     If Ollama is not running, falls back to a mock 'ok' response.
@@ -16,7 +16,7 @@ async def analyze_frame_ai(frame_path: str) -> dict:
             response = await client.post(
                 "http://localhost:11434/api/generate",
                 json={
-                    "model": "llava",  # Using llava as default vision model
+                    "model": model,  # Using dynamic vision model
                     "prompt": prompt,
                     "images": [encoded_string],
                     "stream": False
