@@ -67,3 +67,101 @@ async def test_detect_audio_anomalies_buzzing(mock_create_exec):
     res_static, res_buzzing = await detect_audio_anomalies("test.mp4", static_hz_threshold=0.3, flat_factor_threshold=10.0)
     assert res_static is False
     assert res_buzzing is True
+
+
+@pytest.mark.asyncio
+@patch("core.video_pipeline.analyze_frame")
+@patch("core.video_pipeline.analyze_frame_ai")
+@patch("core.video_pipeline.detect_audio_anomalies", new_callable=AsyncMock)
+@patch("core.video_pipeline.detect_silence", new_callable=AsyncMock)
+@patch("core.video_pipeline.detect_pts_offset", new_callable=AsyncMock)
+@patch("core.video_pipeline.ffmpeg")
+@patch("core.video_pipeline.os.path.exists")
+@patch("core.video_pipeline.os.listdir")
+async def test_performance_ai_sampling(
+    mock_listdir, mock_exists, mock_ffmpeg, mock_pts, mock_silence, mock_audio, 
+    mock_analyze_ai, mock_analyze_frame
+):
+    import time
+    mock_exists.return_value = True
+    
+    # Mock video probe
+    mock_probe = {"format": {"duration": "20.0"}}
+    mock_ffmpeg.probe.return_value = mock_probe
+    
+    mock_pts.return_value = False
+    mock_silence.return_value = []
+    mock_audio.return_value = (False, False)
+    
+    # Mock 20 frames
+    mock_listdir.return_value = [f"test_video.mp4_frame_{str(i).zfill(4)}.jpg" for i in range(20)]
+    
+    mock_analyze_frame.return_value = {
+        "mean_brightness": 100.0,
+        "is_black_screen": False,
+        "laplacian_variance": 500.0,
+        "is_blurry": False,
+        "has_top_artifact": False
+    }
+    
+    async def mock_ai(*args, **kwargs):
+        return {"is_slate": False, "confidence": 0.0}
+        
+    mock_analyze_ai.side_effect = mock_ai
+    
+    start = time.time()
+    await extract_and_analyze("test_video.mp4")
+    elapsed = time.time() - start
+    
+    # We sampled 20 frames. Every 5th frame is index 0, 5, 10, 15 = 4 AI calls.
+    # Each AI call for a normal frame falls back to llava, so 2 calls per index. 4 * 2 = 8.
+    assert mock_analyze_ai.call_count == 8
+    
+    # Fast without DB commits internally loops
+    assert elapsed < 5.0
+
+
+@pytest.mark.asyncio
+@patch("core.video_pipeline.SessionLocal")
+@patch("core.video_pipeline.analyze_frame")
+@patch("core.video_pipeline.analyze_frame_ai")
+@patch("core.video_pipeline.detect_audio_anomalies", new_callable=AsyncMock)
+@patch("core.video_pipeline.detect_silence", new_callable=AsyncMock)
+@patch("core.video_pipeline.detect_pts_offset", new_callable=AsyncMock)
+@patch("core.video_pipeline.ffmpeg")
+@patch("core.video_pipeline.os.path.exists")
+@patch("core.video_pipeline.os.listdir")
+async def test_multiple_anomalies_recorded(
+    mock_listdir, mock_exists, mock_ffmpeg, mock_pts, mock_silence, mock_audio, 
+    mock_analyze_ai, mock_analyze_frame, mock_session
+):
+    mock_exists.return_value = True
+    
+    # Mock video probe
+    mock_probe = {"format": {"duration": "1.0"}}
+    mock_ffmpeg.probe.return_value = mock_probe
+    
+    mock_pts.return_value = False
+    mock_silence.return_value = []
+    # Both static and buzzing audio detect as True
+    mock_audio.return_value = (True, True)
+    
+    # Mock 1 frame
+    mock_listdir.return_value = [f"test_video.mp4_frame_0000.jpg"]
+    
+    # Force black screen anomaly as well
+    mock_analyze_frame.return_value = {
+        "mean_brightness": 100.0,
+        "is_black_screen": True,
+        "laplacian_variance": 500.0,
+        "is_blurry": False,
+        "has_top_artifact": False
+    }
+    
+    mock_db = mock_session.return_value
+    
+    await extract_and_analyze("test_video.mp4")
+    
+    # It should have called db.add for: static_audio, buzzing_audio, black_screen
+    # That is exactly 3 calls.
+    assert mock_db.add.call_count == 3

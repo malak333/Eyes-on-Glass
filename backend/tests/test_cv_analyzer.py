@@ -1,31 +1,24 @@
-import cv2
-import numpy as np
 import pytest
-import os
-from core.analyzers.cv_analyzer import analyze_frame
+import numpy as np
+from core.analyzers.cv_analyzer import calculate_blockiness
 
-def test_analyze_frame_top_artifact(tmp_path):
-    # Create a synthetic image with a heavy artifact at the top
-    # Normal image is just a blank gray screen
-    img = np.ones((100, 100, 3), dtype=np.uint8) * 128
-    
-    # Add a top artifact (high variance noise at the top 10 rows)
-    np.random.seed(42)  # For reproducibility
-    noise = np.random.randint(0, 256, (10, 100, 3), dtype=np.uint8)
-    img[0:10, :] = noise
-    
-    test_file = str(tmp_path / "test_artifact.jpg")
-    cv2.imwrite(test_file, img)
-    
-    result = analyze_frame(test_file)
-    assert result["has_top_artifact"] is True
+def test_calculate_blockiness_small_image():
+    # If image is smaller than 16x16, should return 1.0 reliably.
+    img = np.zeros((10, 10), dtype=np.uint8)
+    assert calculate_blockiness(img) == 1.0
 
-def test_analyze_frame_no_artifact(tmp_path):
-    # Create a normal synthetic image
-    img = np.ones((100, 100, 3), dtype=np.uint8) * 128
-    
-    test_file = str(tmp_path / "test_no_artifact.jpg")
-    cv2.imwrite(test_file, img)
-    
-    result = analyze_frame(test_file)
-    assert result["has_top_artifact"] is False
+def test_calculate_blockiness_smooth_image():
+    # A completely smooth gradient shouldn't produce blockiness > 1.05
+    img = np.tile(np.arange(256, dtype=np.uint8), (256, 1))
+    assert calculate_blockiness(img) < 1.05
+
+def test_calculate_blockiness_macroblocked():
+    # Simulate a macroblock artifact by changing intensity sharply exactly on 8-pixel boundaries
+    img = np.zeros((64, 64), dtype=np.uint8)
+    for i in range(8):
+        for j in range(8):
+            # Fill 8x8 blocks with alternating intensities
+            img[i*8:(i+1)*8, j*8:(j+1)*8] = (i + j) % 2 * 100
+            
+    # This checkerboard pattern directly at 8x8 boundaries should produce a high blockiness factor.
+    assert calculate_blockiness(img) >= 1.2

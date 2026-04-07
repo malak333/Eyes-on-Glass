@@ -248,89 +248,97 @@ async def extract_and_analyze(video_filename: str):
     analysis_progress[video_filename]["total"] = len(frame_files)
 
     db = SessionLocal()
-    for index, frame_file in enumerate(frame_files):
-        analysis_progress[video_filename]["current"] = index + 1
-        timestamp_sec = float(index) / fps_to_extract
-        frame_path = os.path.join(THUMBNAILS_DIR, frame_file)
-
-        # 1. Run CV Analysis first
-        cv_results = analyze_frame(frame_path)
-
-        issues_found = []
-
-        # Check audio silence first since it's pre-calculated
-        is_silent = any(
-            start <= timestamp_sec <= end for start,
-            end in silence_intervals)
-
-        macro_confidence = max(
-            0.0, 1.0 - (cv_results.get("laplacian_variance", 50.0) / 50.0))
-
-        is_black = cv_results.get("is_black_screen")
-        has_top_artifact = cv_results.get("has_top_artifact")
-
-        # Track audio and video issues independently to ensure AI runs even if audio fails
-        if is_silent:
-            issues_found.append(("no_audio", 1.0, "ffmpeg"))
-        elif has_buzzing_audio:
-            issues_found.append(("buzzing_audio", 1.0, "ffmpeg"))
-        elif has_static_audio:
-            issues_found.append(("static_audio", 1.0, "ffmpeg"))
-
-        video_issue_found = False
-        if is_black:
-            issues_found.append(("black_screen", 1.0, "opencv"))
-            video_issue_found = True
-        else:
-            if cv_results.get("is_blurry") and macro_confidence >= 0.80:
-                issues_found.append(("macroblocking", round(macro_confidence, 2), "opencv"))
-                video_issue_found = True
-
-            if has_lip_sync_issue:
-                issues_found.append(("lip_sync", 0.95, "ffmpeg"))
-                video_issue_found = True
-
-            if has_top_artifact:
-                issues_found.append(("top_artifact", 1.0, "opencv"))
-                video_issue_found = True
-
-        if not video_issue_found:
-            # 2. If no CV video issues, run lighter AI Analysis (moondream)
-            ai_results = await analyze_frame_ai(frame_path, model="moondream")
-
-            if ai_results.get("is_slate"):
-                issues_found.append(("slate", ai_results.get("confidence", 0.85), "quick_ai"))
+    try:
+        for index, frame_file in enumerate(frame_files):
+            analysis_progress[video_filename]["current"] = index + 1
+            timestamp_sec = float(index) / fps_to_extract
+            frame_path = os.path.join(THUMBNAILS_DIR, frame_file)
+    
+            # 1. Run CV Analysis first
+            # Use asyncio.to_thread so CPU-bound opencv doesn't block the FastAPI event loop
+            cv_results = await asyncio.to_thread(analyze_frame, frame_path)
+    
+            issues_found = []
+    
+            # Check audio silence first since it's pre-calculated
+            is_silent = any(
+                start <= timestamp_sec <= end for start,
+                end in silence_intervals)
+    
+            blockiness = cv_results.get("blockiness", 1.0)
+            macro_confidence = min(1.0, max(0.0, (blockiness - 1.05) / 0.25))
+    
+            is_black = cv_results.get("is_black_screen")
+            has_top_artifact = cv_results.get("has_top_artifact")
+    
+            # Track audio and video issues independently to ensure AI runs even if audio fails
+            if is_silent:
+                issues_found.append(("no_audio", 1.0, "ffmpeg"))
+            if has_buzzing_audio:
+                issues_found.append(("buzzing_audio", 1.0, "ffmpeg"))
+            if has_static_audio:
+                issues_found.append(("static_audio", 1.0, "ffmpeg"))
+    
+            video_issue_found = False
+            if is_black:
+                issues_found.append(("black_screen", 1.0, "opencv"))
                 video_issue_found = True
             else:
-                # 3. If Moondream does NOT detect anything, fallback to heavier
-                # LLaVA for double check
-                fallback_ai_results = await analyze_frame_ai(frame_path, model="llava")
-                if fallback_ai_results.get("is_slate"):
-                    issues_found.append(("slate", fallback_ai_results.get("confidence", 0.85), "heavy_ai"))
+                if cv_results.get("is_blurry"):
+                    issues_found.append(("blur", 1.0, "opencv"))
                     video_issue_found = True
-
-        if len(issues_found) == 0:
-            issues_found.append(("ok", 1.0, "opencv"))
-
-        # Add entries to DB
-        # To simulate the network log requirement ("source, backbone, dest")
-        for issue_type, confidence, engine in issues_found:
-            log_entry = VideoLog(
-                video_filename=video_filename,
-                timestamp_sec=timestamp_sec,
-                node_source="Primary-Ingest-A",
-                node_backbone="East-Backbone-2",
-                node_dest="Distribution-Node",
-                issue_type=issue_type,
-                issue_score=confidence,
-                analysis_engine=engine,
-                thumbnail_path=frame_file
-            )
-            db.add(log_entry)
-
+    
+                if macro_confidence >= 0.80:
+                    issues_found.append(("macroblocking", round(macro_confidence, 2), "opencv"))
+                    video_issue_found = True
+    
+                if has_lip_sync_issue:
+                    issues_found.append(("lip_sync", 0.95, "ffmpeg"))
+                    video_issue_found = True
+    
+                if has_top_artifact:
+                    issues_found.append(("top_artifact", 1.0, "opencv"))
+                    video_issue_found = True
+    
+            if not video_issue_found:
+                # 2. To avoid massive overhead, only run AI Analysis (moondream) occasionally.
+                # Sample every 5th frame (e.g., 1 check every 5 seconds).
+                if index % 5 == 0:
+                    ai_results = await analyze_frame_ai(frame_path, model="moondream")
+    
+                    if ai_results.get("is_slate"):
+                        issues_found.append(("slate", ai_results.get("confidence", 0.85), "quick_ai"))
+                        video_issue_found = True
+                    else:
+                        # 3. If Moondream does NOT detect anything, fallback to heavier
+                        # LLaVA for double check
+                        fallback_ai_results = await analyze_frame_ai(frame_path, model="llava")
+                        if fallback_ai_results.get("is_slate"):
+                            issues_found.append(("slate", fallback_ai_results.get("confidence", 0.85), "heavy_ai"))
+                            video_issue_found = True
+    
+            if len(issues_found) == 0:
+                issues_found.append(("ok", 1.0, "opencv"))
+    
+            # Add entries to DB
+            # To simulate the network log requirement ("source, backbone, dest")
+            for issue_type, confidence, engine in issues_found:
+                log_entry = VideoLog(
+                    video_filename=video_filename,
+                    timestamp_sec=timestamp_sec,
+                    node_source="Primary-Ingest-A",
+                    node_backbone="East-Backbone-2",
+                    node_dest="Distribution-Node",
+                    issue_type=issue_type,
+                    issue_score=confidence,
+                    analysis_engine=engine,
+                    thumbnail_path=frame_file
+                )
+                db.add(log_entry)
+    
         db.commit()
-
-    db.close()
+    finally:
+        db.close()
     analysis_progress[video_filename]["status"] = "completed"
     analysis_progress[video_filename]["total_time"] = round(time.time() - start_time, 2)
     print(f"Finished processing {video_filename}")
