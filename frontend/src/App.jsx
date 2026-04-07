@@ -16,7 +16,6 @@ const Timer = ({ startTime }) => {
     const interval = setInterval(() => {
       setElapsed(Date.now() / 1000 - startTime);
     }, 100);
-    setElapsed(Date.now() / 1000 - startTime);
     return () => clearInterval(interval);
   }, [startTime]);
 
