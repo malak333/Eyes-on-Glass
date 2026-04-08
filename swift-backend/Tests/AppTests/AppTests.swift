@@ -26,8 +26,8 @@ final class AppTests: XCTestCase {
         try app.test(.POST, "upload", beforeRequest: { req in
             // Make an empty request
         }, afterResponse: { res in
-            // The upload endpoint should reject it as a Bad Request because no file was attached
-            XCTAssertEqual(res.status, .badRequest)
+            // The upload endpoint will reject it as unsupportedMediaType because there is no content-type or body
+            XCTAssertEqual(res.status, .unsupportedMediaType)
         })
     }
     
