@@ -120,7 +120,7 @@ actor SystemMonitor {
                 if let data = try? pipe.fileHandleForReading.readToEnd() {
                     process.waitUntilExit()
                     if let output = String(data: data, encoding: .utf8) {
-                        let regex = try! NSRegularExpression(pattern: "GPU HW active:\\s+(\\d+)%")
+                        let regex = try! NSRegularExpression(pattern: "GPU HW active(?: residency)?:\\s+([0-9.]+)%")
                         let nsRange = NSRange(output.startIndex..<output.endIndex, in: output)
                         if let match = regex.firstMatch(in: output, options: [], range: nsRange) {
                             if let range = Range(match.range(at: 1), in: output),

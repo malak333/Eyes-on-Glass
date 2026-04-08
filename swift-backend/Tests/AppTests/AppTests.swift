@@ -72,4 +72,70 @@ final class AppTests: XCTestCase {
         let intervals = await ExtractionService.detectFreeze(videoPath: "/fake/path/that/does/not/exist.ts")
         XCTAssertTrue(intervals.isEmpty, "detectFreeze should return an empty array for non-existent files rather than crashing")
     }
+    
+    func testThumbnailsEndpointSecurity() async throws {
+        let app = Application(.testing)
+        defer { app.shutdown() }
+        try await configure(app)
+        
+        // Ensure thumbnail directory exists
+        let thumbDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("../backend/thumbnails/")
+        try? FileManager.default.createDirectory(at: thumbDir, withIntermediateDirectories: true)
+        
+        let mockThumb = thumbDir.appendingPathComponent("test_thumb.jpg")
+        try "fake image data".write(to: mockThumb, atomically: true, encoding: .utf8)
+        
+        // 1. Test fetching existent file
+        try app.test(.GET, "thumbnails/test_thumb.jpg", afterResponse: { res in
+            XCTAssertEqual(res.status, .ok)
+            XCTAssertEqual(String(buffer: res.body), "fake image data")
+        })
+        
+        // 2. Test missing file
+        try app.test(.GET, "thumbnails/does_not_exist.jpg", afterResponse: { res in
+            XCTAssertEqual(res.status, .notFound)
+        })
+        
+        // 3. Test path traversal rejection (should be badRequest due to checks)
+        // Vapor's router might decode %2E%2E%2F as ../
+        // We simulate requesting a file using path traversal
+        try app.test(.GET, "thumbnails/..%2F..%2Fetc%2Fpasswd", afterResponse: { res in
+            // Depending on router behavior it might not match the route, or it might hit our badRequest check
+            XCTAssertNotEqual(res.status, .ok)
+        })
+        
+        try? FileManager.default.removeItem(at: mockThumb)
+    }
+    
+    func testVisionAnalyzerVImagePipeline() async throws {
+        // Generates a mock solid color image to pass through the hardware-accelerated VisionAnalyzer.
+        // Verifies the vImage pipeline can correctly identify black frames bypassing floating point boundaries.
+        let width = 64
+        let height = 64
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue).rawValue
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: bitmapInfo) else {
+            XCTFail("Could not create testing graphics context")
+            return
+        }
+        
+        // Draw pure black
+        context.setFillColor(gray: 0.0, alpha: 1.0)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        
+        guard let cgImage = context.makeImage() else {
+            XCTFail("Failed to generate test image")
+            return
+        }
+        
+        // Send through our zero-copy analyzer
+        let metrics = VisionAnalyzer.analyze(cgImage: cgImage)
+        
+        XCTAssertNotNil(metrics, "Metrics should be generated via vImage without faulting")
+        if let metrics = metrics {
+            XCTAssertTrue(metrics.isBlackScreen, "vImage analysis correctly mapped memory bounds and detected solid black.")
+            XCTAssertFalse(metrics.isBlurry, "A solid image shouldn't trigger laplacian variance incorrectly.")
+        }
+    }
 }

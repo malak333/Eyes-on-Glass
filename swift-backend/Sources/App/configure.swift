@@ -13,12 +13,7 @@ public func configure(_ app: Application) async throws {
     app.middleware.use(cors, at: .beginning)
 
     // Allows serving static files from Public directories, we will set up 'thumbnails'
-    let fileMiddleware = FileMiddleware(
-        publicDirectory: app.directory.workingDirectory + "../backend/thumbnails", 
-        defaultFile: nil, 
-        directoryAction: .none
-    )
-    app.middleware.use(fileMiddleware)
+    // in routes.swift using req.fileio.streamFile instead to avoid FileMiddleware path appending issues.
     
     // Increase maximum body size for video uploads
     app.routes.defaultMaxBodySize = "1gb"

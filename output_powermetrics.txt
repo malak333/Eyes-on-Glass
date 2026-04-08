@@ -1,0 +1,18 @@
+Machine model: MacBookPro18,1
+OS version: 25E246
+Boot arguments: 
+Boot time: Fri Apr  3 19:50:41 2026
+
+
+
+*** Sampled system activity (Wed Apr  8 14:58:04 2026 -0400) (13.59ms elapsed) ***
+
+
+**** GPU usage ****
+
+GPU HW active frequency: 0 MHz
+GPU HW active residency:   0.00% (389 MHz:   0% 486 MHz:   0% 648 MHz:   0% 778 MHz:   0% 972 MHz:   0% 1296 MHz:   0%)
+GPU SW requested state: (P1 :   0% P2 :   0% P3 :   0% P4 :   0% P5 :   0% P6 :   0%)
+GPU idle residency: 100.00%
+GPU Power: 0 mW
+
