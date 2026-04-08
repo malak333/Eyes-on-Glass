@@ -149,13 +149,10 @@ async def detect_audio_clicks(video_path: str) -> bool:
     """
     Detects audio clicking using discrete volume jump analysis.
     """
-
-    import uuid
-    wav_path = f"/tmp/audio_click_detect_{uuid.uuid4().hex}.wav"
     cmd = [
         "ffmpeg", "-i", video_path,
-        "-vn", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "44100",
-        wav_path, "-y", "-v", "quiet"
+        "-vn", "-map", "0:a:0?", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "44100",
+        "-f", "s16le", "-", "-v", "quiet"
     ]
 
     process = await asyncio.create_subprocess_exec(
@@ -163,44 +160,36 @@ async def detect_audio_clicks(video_path: str) -> bool:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
-    await process.communicate()
+    stdout, _ = await process.communicate()
 
-    if not os.path.exists(wav_path):
+    if not stdout:
         return False
 
     try:
         import numpy as np
-        with wave.open(wav_path, 'rb') as w:
-            n_frames = w.getnframes()
-            if n_frames == 0:
+        def calculate_clicks(stdout_bytes):
+            # Use numpy for rapid computation directly from memory buffer
+            data = np.frombuffer(stdout_bytes, dtype=np.int16)
+            if len(data) < 2:
                 return False
-            frames = w.readframes(n_frames)
-            # Use numpy for rapid computation
-            data = np.frombuffer(frames, dtype=np.int16)
 
-        if len(data) < 2:
+            data_f = data.astype(np.float32)
+            diffs = np.abs(np.diff(data_f))
+            
+            mean_diff = np.mean(diffs)
+            std_diff = np.std(diffs)
+            
+            clicks = diffs[diffs > mean_diff + 20 * std_diff]
+            max_diff = np.max(diffs) if len(diffs) > 0 else 0
+
+            if len(clicks) > 10 and max_diff > 2000 and (max_diff / (mean_diff + 1e-5)) > 100:
+                print(f"Audio clicking detected: {len(clicks)} clicks, max diff {max_diff}")
+                return True
             return False
-
-        data_f = data.astype(np.float32)
-        diffs = np.abs(np.diff(data_f))
-        
-        mean_diff = np.mean(diffs)
-        std_diff = np.std(diffs)
-        
-        clicks = diffs[diffs > mean_diff + 20 * std_diff]
-        max_diff = np.max(diffs) if len(diffs) > 0 else 0
-
-        if len(clicks) > 10 and max_diff > 2000 and (max_diff / (mean_diff + 1e-5)) > 100:
-            print(f"Audio clicking detected: {len(clicks)} clicks, max diff {max_diff}")
-            return True
+            
+        return await asyncio.to_thread(calculate_clicks, stdout)
     except Exception as e:
         print(f"Error detecting audio clicks: {e}")
-    finally:
-        if os.path.exists(wav_path):
-            try:
-                os.remove(wav_path)
-            except Exception:
-                pass
 
     return False
 

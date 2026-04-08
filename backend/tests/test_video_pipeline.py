@@ -71,25 +71,17 @@ async def test_detect_audio_anomalies_buzzing(mock_create_exec):
 
 @pytest.mark.asyncio
 @patch("core.video_pipeline.asyncio.create_subprocess_exec")
-@patch("core.video_pipeline.os.path.exists")
-@patch("core.video_pipeline.wave.open")
-async def test_detect_audio_clicks(mock_wave_open, mock_exists, mock_create_exec):
-    mock_exists.return_value = True
-    
-    mock_wave = mock_wave_open.return_value.__enter__.return_value
-    mock_wave.getnframes.return_value = 100
-    
+async def test_detect_audio_clicks(mock_create_exec):
     import struct
     # Create fake frames data to simulate clicks
     mock_data = [10] * 50000
     for i in range(12):
         mock_data[i * 50] = 5000
         
-    mock_wave.getnframes.return_value = len(mock_data)
     frames = struct.pack(f"<{len(mock_data)}h", *mock_data)
-    mock_wave.readframes.return_value = frames
     
     mock_process = AsyncMock()
+    mock_process.communicate.return_value = (frames, b"")
     mock_create_exec.return_value = mock_process
     
     res = await detect_audio_clicks("test.mp4")
