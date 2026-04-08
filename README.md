@@ -16,24 +16,23 @@ The platform architecture is highly localized and split into a React Frontend an
    - Features dynamic tabbed navigation to seamlessly switch between the currently analyzed "Active Stream" and previously generated "Old Analysis" history logs.
    - Displays a live, asynchronous **Progress Tracking Bar** during video uploads so you can monitor extraction and processing status.
    - Includes a dynamic **Analysis Breakdown** summary detailing every specific anomaly detected (e.g., Macroblocking, Lip Sync, Audio Dropouts) broken down by total frame count.
-2. **Backend (`backend/`)**:
-   - A robust **FastAPI** server orchestration pipeline. 
-   - Receives video streams and executes a **Two-Tiered A/V Sync Test** analyzing the internal Presentation Time Stamps (PTS) via `ffprobe`, catching audio drift and multiplexing failures synchronously.
-   - Delegates local processing to **FFmpeg**, which carves out 1 FPS frame thumbnails efficiently.
-   - Feeds extracted thumbnails sequentially into a **Cascading Verification Pipeline**, where OpenCV and FFmpeg instantly short-circuit and flag deterministic errors across two independent, concurrent tracks. The Audio Track detects silencing and buzzing, while the Video Track simultaneously spots true macroblocking (via structural blockiness calculations), frame blur (via low Laplacian Variance), and solid black screens without interrupting the others.
-   - **Analysis Engine Tracking**: Every detected issue is securely tagged directly to the specific execution engine (`ffmpeg`, `opencv`, `quick_ai`, or `heavy_ai`) to grant engineers precise debugging observability.
-   - Only beautifully clean frames (free of CV-level video issues) fall through to the **AI Analyzers**, which dynamically orchestrate a tiered approach using **Ollama Vision Language Models**: checking the lightweight **Moondream** model first for high-speed anomalous slate detection before defaulting to the heavier **LLaVA** model as a final assurance check.
-   - Implements an asynchronous system polling task using `psutil` and macOS `powermetrics` to stream live operational tracking back to the dashboard.
-   - Automatically maintains real-time analysis progress state, proactively clearing stale DB logs and leftover thumbnail frames from duplicate file re-uploads to ensure accurate data reflection.
-   - Natively verified via **Pytest** for fast operational safety checks without booting the entire stack.
+2. **Backend (`swift-backend/`)**:
+   - A high-performance **Swift Vapor** service running natively on Apple Silicon.
+   - Receives video streams asynchronously natively bypassing the former Python GIL bottlenecks.
+   - Delegates local processing to **AVFoundation/AVAssetReader**, carving out frames directly into memory, dramatically outscaling sub-process FFmpeg extraction speeds.
+   - Feeds extracted frames sequentially into a **Native Validation Pipeline**. Math matrix routines executed natively via `vImage` and `Accelerate` check for standard deviation and laplacian threshold differences replacing heavyweight OpenCV libraries. The native Core Audio loop scans for decibel peaking, muting, and zero-cross clipping on RAW buffers.
+   - **Analysis Engine Tracking**: Every detected issue is securely tagged directly to the specific execution engine (`avfoundation`, `coreimage`, `quick_ai`, or `heavy_ai`) to grant engineers precise debugging observability.
+   - Only beautifully clean frames fall through to the **AI Analyzers**, which dynamically orchestrate a tiered approach using **Ollama Vision Language Models**: checking the lightweight **Moondream** model first for high-speed anomalous slate detection before defaulting to the heavier **LLaVA** model as a final assurance check.
+   - Implements an asynchronous system polling task using macOS `mach_task` primitives alongside `powermetrics` natively within Swift to stream live operational hardware telemetry back to the dashboard.
+   - **Deprecated Python Core**: The previous experimental FastAPI backend pipeline code remains inside `backend/` strictly for historical reference and Python data-science testing pipelines (i.e. `tests/run_swift_battery.py`).
 3. **Log Aggregator**:
-   - Simulated network ingestion logs (originating from combinations of Source Nodes, Backbones, and Distro Dests) are logged inside a local persistent **SQLite** database (`sqlite.db`), providing chronological mapping for every anomaly captured.
+   - Simulated network ingestion logs (originating from combinations of Source Nodes, Backbones, and Distro Dests) are logged inside a local persistent **SQLite** database (`backend/sqlite.db`), tracked exclusively via **Swift Fluent ORM**.
 
 ---
 
 ## 🚀 Getting Started
 
-The platform runs two distinct services.
+The platform runs two distinct services natively.
 
 ### 1. Requirements
 Ensure you are running **Python 3.10+** and **Node 18+**. 
@@ -47,20 +46,23 @@ To enable the AI vision analysis, you will also need to have **Ollama** installe
 
 *(Note: Using `brew services start ollama` registers Ollama as a background daemon that runs continuously and starts automatically on reboot. You do not need to manually start it alongside the backend/frontend scripts. If Ollama is unavailable, the pipeline gracefully falls back to a simulated "OK" state without crashing)*
 
-### 2. Run the Backend API
+### 2. Run the Production Backend
+
+The backend has been ported purely to Swift Vapor for robust Apple Silicon compatibility!
+To launch the backend seamlessly, use the dedicated bash integration script located at the project root:
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+./start_production.sh
 ```
-This mounts the API interface globally.
+
+This officially mounts the API interface globally.
 *(Note: Extracted anomalies will populate locally into `backend/thumbnails`.)*
 
-> **Hardware Telemetry Warning**: To access real macOS Apple Silicon **GPU % utilization metrics** inside the dashboard's System Resources graph, you will need to start the backend with root privileges. We have provided a helper script to do this automatically by managing the virtual context and `PYTHONPATH`. Simply execute `./backend/run_sudo.sh` from the project root instead of manually running `uvicorn`. If executed without `sudo`, the GPU component will fall back to an estimation curve.
+> **Hardware Telemetry Warning**: To access real macOS Apple Silicon **GPU % utilization metrics** inside the dashboard's System Resources graph, the `start_production.sh` script automatically wraps the final Swift binary trigger in `sudo`. This unlocks proper execution of `powermetrics`.
+
+### Networking & Limits
+- **CORS API Middleware**: The Vapor engine emits Cross-Origin Resource Sharing (CORS) headers by default. This permits any external frontend (like Vite running on `localhost:5173`) to seamlessly pipe payloads directly into `127.0.0.1:8080` without experiencing browser blockage.
+- **Payload Constraints**: Vapor's default 16MB file threshold has been aggressively scaled up. The core effectively eats payload sizes of up to **1GB**, allowing raw TS and MP4 ingest functionality without HTTP 413 drops.
 
 ### 3. Run the Web Dashboard
 
@@ -82,7 +84,7 @@ A solid testing baseline exists for both the React dashboard and the FastAPI orc
 To locally verify project fidelity:
 - **Backend Test Suite**: `cd backend && source .venv/bin/activate && PYTHONPATH=. pytest tests/`
 - **Frontend Test Suite**: `cd frontend && npm test`
-- **End-to-End Battery Test**: `cd backend && source .venv/bin/activate && PYTHONPATH=. python tests/run_video_battery.py`
+- **Platform Integration Battery**: `cd tests && python3 run_swift_battery.py`
 
 ---
 

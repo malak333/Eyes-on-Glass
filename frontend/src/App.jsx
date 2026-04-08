@@ -6,7 +6,7 @@ import LogViewer from './components/LogViewer';
 import SystemResources from './components/SystemResources';
 import { Activity, ShieldAlert, CheckCircle, RefreshCcw } from 'lucide-react';
 
-const API_URL = "http://localhost:8000";
+const API_URL = "http://127.0.0.1:8080";
 
 const Timer = ({ startTime }) => {
   const [elapsed, setElapsed] = useState(0);
