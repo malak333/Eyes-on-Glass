@@ -88,7 +88,7 @@ def analyze_frame(frame_path: str) -> dict:
     grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     var_x = np.var(grad_x)
     var_y = np.var(grad_y)
-    # Perfect color bars have strong vertical boundaries (high var_x) 
+    # Perfect color bars have strong vertical boundaries (high var_x)
     # and almost no horizontal boundaries (low var_y)
     is_bars = bool((var_y < 2000.0) and (var_x > 500.0) and (var_x > var_y * 0.5))
 
