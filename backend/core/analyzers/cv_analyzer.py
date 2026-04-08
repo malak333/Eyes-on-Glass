@@ -66,7 +66,7 @@ def analyze_frame(frame_path: str) -> dict:
     # 3. Blur / Macroblocking rough estimation
     # Laplacian variance is a common way to measure blur/focus
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-    
+
     # Blur results in very low variance.
     is_blurry = bool(laplacian_var < 300.0 and std_dev > 10.0)
 
@@ -88,7 +88,8 @@ def analyze_frame(frame_path: str) -> dict:
     grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     var_x = np.var(grad_x)
     var_y = np.var(grad_y)
-    # Perfect color bars have strong vertical boundaries (high var_x) and almost no horizontal boundaries (low var_y)
+    # Perfect color bars have strong vertical boundaries (high var_x) 
+    # and almost no horizontal boundaries (low var_y)
     is_bars = bool((var_y < 2000.0) and (var_x > 500.0) and (var_x > var_y * 0.5))
 
     # 5. Snowflakes / Static Video

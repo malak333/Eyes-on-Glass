@@ -3,8 +3,6 @@ import asyncio
 import ffmpeg
 import re
 import time
-import wave
-import struct
 from db.database import SessionLocal, VideoLog
 from core.analyzers.cv_analyzer import analyze_frame
 from core.analyzers.ai_analyzer import analyze_frame_ai
@@ -167,6 +165,7 @@ async def detect_audio_clicks(video_path: str) -> bool:
 
     try:
         import numpy as np
+
         def calculate_clicks(stdout_bytes):
             # Use numpy for rapid computation directly from memory buffer
             data = np.frombuffer(stdout_bytes, dtype=np.int16)
@@ -175,10 +174,10 @@ async def detect_audio_clicks(video_path: str) -> bool:
 
             data_f = data.astype(np.float32)
             diffs = np.abs(np.diff(data_f))
-            
+
             mean_diff = np.mean(diffs)
             std_diff = np.std(diffs)
-            
+
             clicks = diffs[diffs > mean_diff + 20 * std_diff]
             max_diff = np.max(diffs) if len(diffs) > 0 else 0
 
@@ -186,7 +185,7 @@ async def detect_audio_clicks(video_path: str) -> bool:
                 print(f"Audio clicking detected: {len(clicks)} clicks, max diff {max_diff}")
                 return True
             return False
-            
+
         return await asyncio.to_thread(calculate_clicks, stdout)
     except Exception as e:
         print(f"Error detecting audio clicks: {e}")
@@ -298,9 +297,8 @@ async def extract_and_analyze(video_filename: str):
         if f.startswith(f"{video_filename}_frame_"):
             try:
                 os.remove(os.path.join(THUMBNAILS_DIR, f))
-            except Exception as e:
+            except Exception:
                 pass
-
 
     frame_pattern = os.path.join(
         THUMBNAILS_DIR,
@@ -352,7 +350,7 @@ async def extract_and_analyze(video_filename: str):
             print(f"Exception during parallel processing: {r}")
 
     has_lip_sync_issue = results[0] if not isinstance(results[0], Exception) else False
-    
+
     silence_intervals = results[2] if not isinstance(results[2], Exception) else []
     print(f"Detected silence intervals: {silence_intervals}")
 
@@ -463,8 +461,8 @@ async def extract_and_analyze(video_filename: str):
                             # LLaVA for double check
                             fallback_ai_results = await analyze_frame_ai(frame_path, model="llava")
                             if fallback_ai_results.get("is_slate"):
-                                issues_found.append(
-                                    ("slate", fallback_ai_results.get("confidence", 0.85), "heavy_ai"))
+                                confidence = fallback_ai_results.get("confidence", 0.85)
+                                issues_found.append(("slate", confidence, "heavy_ai"))
                                 video_issue_found = True
 
                 if len(issues_found) == 0:
