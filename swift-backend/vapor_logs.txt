@@ -1,0 +1,4 @@
+[ WARNING ] bind(descriptor:ptr:bytes:): Address already in use) (errno: 48)
+[ WARNING ] bind(descriptor:ptr:bytes:): Address already in use) (errno: 48)
+Swift/ErrorType.swift:254: Fatal error: Error raised at top level: bind(descriptor:ptr:bytes:): Address already in use) (errno: 48)
+sudo: a password is required

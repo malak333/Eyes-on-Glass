@@ -97,29 +97,37 @@ actor SystemMonitor {
         }
         return tot_cpu
     }
-    
     private func gpuUsage() async -> Double? {
         return await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            process.arguments = ["-n", "powermetrics", "--samplers", "gpu_power", "-n", "1", "-i", "10"]
+            process.arguments = ["-S", "powermetrics", "--samplers", "gpu_power", "-n", "1", "-i", "10"]
+            
+            let stdinPipe = Pipe()
+            process.standardInput = stdinPipe
             
             let pipe = Pipe()
             process.standardOutput = pipe
             
             do {
+                if let pass = ProcessInfo.processInfo.environment["PASSWORD_SUDO"] {
+                    stdinPipe.fileHandleForWriting.write(Data("\(pass)\n".utf8))
+                }
                 try process.run()
-                process.waitUntilExit()
+                // Do not wait until exit yet! Or close stdin immediately.
+                stdinPipe.fileHandleForWriting.closeFile()
                 
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let output = String(data: data, encoding: .utf8) {
-                    let regex = try! NSRegularExpression(pattern: "GPU HW active:\\s+(\\d+)%")
-                    let nsRange = NSRange(output.startIndex..<output.endIndex, in: output)
-                    if let match = regex.firstMatch(in: output, options: [], range: nsRange) {
-                        if let range = Range(match.range(at: 1), in: output),
-                           let val = Double(output[range]) {
-                            continuation.resume(returning: val)
-                            return
+                if let data = try? pipe.fileHandleForReading.readToEnd() {
+                    process.waitUntilExit()
+                    if let output = String(data: data, encoding: .utf8) {
+                        let regex = try! NSRegularExpression(pattern: "GPU HW active:\\s+(\\d+)%")
+                        let nsRange = NSRange(output.startIndex..<output.endIndex, in: output)
+                        if let match = regex.firstMatch(in: output, options: [], range: nsRange) {
+                            if let range = Range(match.range(at: 1), in: output),
+                               let val = Double(output[range]) {
+                                continuation.resume(returning: val)
+                                return
+                            }
                         }
                     }
                 }
