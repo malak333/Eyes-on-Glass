@@ -53,3 +53,14 @@ jobs:
       run: |
         cd frontend
         npm test
+
+  swift-backend-test:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install system dependencies
+      run: brew install ffmpeg
+    - name: Build and Test
+      run: |
+        cd swift-backend
+        swift test
