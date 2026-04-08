@@ -67,8 +67,8 @@ def analyze_frame(frame_path: str) -> dict:
     # Laplacian variance is a common way to measure blur/focus
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     
-    # Blur results in very low variance. But pure black/solid colors also do.
-    is_blurry = bool(laplacian_var < 5.0 and std_dev > 10.0)
+    # Blur results in very low variance.
+    is_blurry = bool(laplacian_var < 300.0 and std_dev > 10.0)
 
     # Macroblocking blockiness metric
     blockiness = calculate_blockiness(gray)
@@ -89,12 +89,12 @@ def analyze_frame(frame_path: str) -> dict:
     var_x = np.var(grad_x)
     var_y = np.var(grad_y)
     # Perfect color bars have strong vertical boundaries (high var_x) and almost no horizontal boundaries (low var_y)
-    is_bars = bool((var_y < 500.0) and (var_x > 1000.0) and (var_x > var_y * 10))
+    is_bars = bool((var_y < 2000.0) and (var_x > 500.0) and (var_x > var_y * 0.5))
 
     # 5. Snowflakes / Static Video
     std_dev = np.std(gray)
-    # Snowflakes typically have very high variance/noise (laplacian > 5000), uniform-like huge std_dev, and NO blockiness.
-    is_snowflakes = bool(std_dev > 30.0 and laplacian_var > 4000.0 and blockiness < 1.3)
+    # Snowflakes typically have very high variance/noise
+    is_snowflakes = bool(std_dev > 20.0 and laplacian_var > 500.0 and blockiness < 2.0)
 
     return {
         "mean_brightness": float(mean_brightness),

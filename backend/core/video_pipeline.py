@@ -91,7 +91,7 @@ async def detect_lip_sync_ai(video_path: str) -> bool:
 
 async def detect_audio_anomalies(
     video_path: str,
-    static_hz_threshold: float = 0.3,
+    static_hz_threshold: float = 0.2,
     flat_factor_threshold: float = 10.0
 ) -> tuple:
     """
@@ -150,7 +150,8 @@ async def detect_audio_clicks(video_path: str) -> bool:
     Detects audio clicking using discrete volume jump analysis.
     """
 
-    wav_path = "/tmp/audio_click_detect.wav"
+    import uuid
+    wav_path = f"/tmp/audio_click_detect_{uuid.uuid4().hex}.wav"
     cmd = [
         "ffmpeg", "-i", video_path,
         "-vn", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "44100",
@@ -235,6 +236,9 @@ async def detect_silence(video_path: str):
             silence_intervals.append((current_start, end_time))
             current_start = None
 
+    if current_start is not None:
+        silence_intervals.append((current_start, float('inf')))
+
     return silence_intervals
 
 
@@ -269,6 +273,9 @@ async def detect_freeze(video_path: str):
             freeze_intervals.append((current_start, end_time))
             current_start = None
 
+    if current_start is not None:
+        freeze_intervals.append((current_start, float('inf')))
+
     return freeze_intervals
 
 
@@ -297,54 +304,78 @@ async def extract_and_analyze(video_filename: str):
     # For MVP, we will extract 1 frame per second
     fps_to_extract = 1.0
 
-    # Lip Sync Detection
-    # 1. Approach 1 (Container PTS Check)
-    has_lip_sync_issue = await detect_pts_offset(video_path)
-    if not has_lip_sync_issue:
-        # 2. Approach 2 (AI Lip Sync Content Check)
-        has_lip_sync_issue = await detect_lip_sync_ai(video_path)
-        if has_lip_sync_issue:
-            print(f"AI Lip Sync Issue detected for {video_filename}")
-    else:
-        print(f"Container Lip Sync Issue detected for {video_filename}")
-
     # Clear any existing frames for this video to avoid bugs on re-upload
     for f in os.listdir(THUMBNAILS_DIR):
         if f.startswith(f"{video_filename}_frame_"):
             try:
                 os.remove(os.path.join(THUMBNAILS_DIR, f))
             except Exception as e:
-                print(f"Error removing old frame {f}: {e}")
+                pass
 
-    # We will use ffmpeg to output frames as JPEGs into the thumbnails directory
-    # Format: filename_timestamp.jpg (for this MVP, using %d and we'll
-    # calculate timestamp)
+
     frame_pattern = os.path.join(
         THUMBNAILS_DIR,
         f"{video_filename}_frame_%04d.jpg")
-    try:
-        (ffmpeg .input(video_path) .filter('fps', fps=fps_to_extract) .output(
+
+    def do_extract():
+        (ffmpeg.input(video_path).filter('fps', fps=fps_to_extract).output(
             frame_pattern, vframes=int(duration * fps_to_extract), **{'qscale:v': 2})
-            .overwrite_output() .run(quiet=True))
-    except ffmpeg.Error as e:
-        print(f"Ffmpeg error: {e}")
+            .overwrite_output().run(quiet=True))
+
+    async def async_extract_frames():
+        try:
+            await asyncio.to_thread(do_extract)
+        except ffmpeg.Error as e:
+            print(f"Ffmpeg error: {e}")
+            raise e
+
+    # Helper for lip sync logic
+    async def get_lip_sync():
+        issue = await detect_pts_offset(video_path)
+        if not issue:
+            issue = await detect_lip_sync_ai(video_path)
+            if issue:
+                print(f"AI Lip Sync Issue detected for {video_filename}")
+        else:
+            print(f"Container Lip Sync Issue detected for {video_filename}")
+        return issue
+
+    # Run extraction and initial detection step in parallel
+    try:
+        results = await asyncio.gather(
+            get_lip_sync(),
+            async_extract_frames(),
+            detect_silence(video_path),
+            detect_freeze(video_path),
+            detect_audio_anomalies(video_path),
+            detect_audio_clicks(video_path),
+            return_exceptions=True
+        )
+    except Exception as e:
+        print(f"Pipeline error: {e}")
         analysis_progress[video_filename]["status"] = "error"
         analysis_progress[video_filename]["total_time"] = round(time.time() - start_time, 2)
         return
 
-    # Detect audio dropouts using async ffmpeg process
-    silence_intervals = await detect_silence(video_path)
+    # Check for exceptions in gather
+    for r in results:
+        if isinstance(r, Exception):
+            print(f"Exception during parallel processing: {r}")
+
+    has_lip_sync_issue = results[0] if not isinstance(results[0], Exception) else False
+    
+    silence_intervals = results[2] if not isinstance(results[2], Exception) else []
     print(f"Detected silence intervals: {silence_intervals}")
 
-    # Detect frozen video intervals
-    freeze_intervals = await detect_freeze(video_path)
+    freeze_intervals = results[3] if not isinstance(results[3], Exception) else []
     print(f"Detected freeze intervals: {freeze_intervals}")
 
-    # Detect static and buzzing audio
-    has_static_audio, has_buzzing_audio = await detect_audio_anomalies(video_path)
+    if not isinstance(results[4], Exception):
+        has_static_audio, has_buzzing_audio = results[4]
+    else:
+        has_static_audio, has_buzzing_audio = False, False
 
-    # Detect audio clicks
-    has_clicking_audio = await detect_audio_clicks(video_path)
+    has_clicking_audio = results[5] if not isinstance(results[5], Exception) else False
 
     # Now, process the extracted frames
     # Count generated frames
@@ -356,111 +387,126 @@ async def extract_and_analyze(video_filename: str):
 
     db = SessionLocal()
     try:
-        for index, frame_file in enumerate(frame_files):
-            analysis_progress[video_filename]["current"] = index + 1
-            timestamp_sec = float(index) / fps_to_extract
-            frame_path = os.path.join(THUMBNAILS_DIR, frame_file)
+        semaphore = asyncio.Semaphore(4)
 
-            # 1. Run CV Analysis first
-            # Use asyncio.to_thread so CPU-bound opencv doesn't block the FastAPI event loop
-            cv_results = await asyncio.to_thread(analyze_frame, frame_path)
+        async def process_frame(index, frame_file):
+            async with semaphore:
+                # Update current progress roughly
+                analysis_progress[video_filename]["current"] = index + 1
+                timestamp_sec = float(index) / fps_to_extract
+                frame_path = os.path.join(THUMBNAILS_DIR, frame_file)
 
-            issues_found = []
+                # 1. Run CV Analysis first
+                cv_results = await asyncio.to_thread(analyze_frame, frame_path)
 
-            # Check audio silence first since it's pre-calculated
-            is_silent = any(
-                start <= timestamp_sec <= end for start,
-                end in silence_intervals)
+                issues_found = []
 
-            is_frozen = any(
-                start <= timestamp_sec <= end for start,
-                end in freeze_intervals)
+                # Check audio silence first since it's pre-calculated
+                is_silent = any(
+                    start <= timestamp_sec <= end for start,
+                    end in silence_intervals)
 
-            blockiness = cv_results.get("blockiness", 1.0)
-            macro_confidence = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
+                is_frozen = any(
+                    start <= timestamp_sec <= end for start,
+                    end in freeze_intervals)
 
-            is_black = cv_results.get("is_black_screen")
-            has_top_artifact = cv_results.get("has_top_artifact")
+                blockiness = cv_results.get("blockiness", 1.0)
+                macro_confidence = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
 
-            # Track audio and video issues independently to ensure AI runs even if audio fails
-            if is_silent:
-                issues_found.append(("no_audio", 1.0, "ffmpeg"))
-            if has_buzzing_audio:
-                issues_found.append(("buzzing_audio", 1.0, "ffmpeg"))
-            if has_static_audio:
-                issues_found.append(("static_audio", 1.0, "ffmpeg"))
-            if has_clicking_audio:
-                issues_found.append(("clicking_audio", 1.0, "ffmpeg"))
+                is_black = cv_results.get("is_black_screen")
+                has_top_artifact = cv_results.get("has_top_artifact")
 
-            video_issue_found = False
-            if is_black:
-                issues_found.append(("black_screen", 1.0, "opencv"))
-                video_issue_found = True
-            else:
-                if is_frozen:
-                    issues_found.append(("frozen_screen", 1.0, "ffmpeg"))
+                # Track audio and video issues independently to ensure AI runs even if audio fails
+                if is_silent:
+                    issues_found.append(("no_audio", 1.0, "ffmpeg"))
+                if has_buzzing_audio:
+                    issues_found.append(("buzzing_audio", 1.0, "ffmpeg"))
+                if has_static_audio:
+                    issues_found.append(("static_audio", 1.0, "ffmpeg"))
+                if has_clicking_audio:
+                    issues_found.append(("clicking_audio", 1.0, "ffmpeg"))
+
+                video_issue_found = False
+                if is_black:
+                    issues_found.append(("black_screen", 1.0, "opencv"))
                     video_issue_found = True
-
-                if cv_results.get("is_bars"):
-                    issues_found.append(("bars_and_tone", 1.0, "opencv"))
-                    video_issue_found = True
-
-                if cv_results.get("is_snowflakes"):
-                    issues_found.append(("snowflakes", 1.0, "opencv"))
-                    video_issue_found = True
-
-                if cv_results.get("is_blurry"):
-                    issues_found.append(("blur", 1.0, "opencv"))
-                    video_issue_found = True
-
-                if macro_confidence >= 0.80 and cv_results.get("laplacian_variance", 0) > 300.0:
-                    issues_found.append(("macroblocking", round(macro_confidence, 2), "opencv"))
-                    video_issue_found = True
-
-                if has_lip_sync_issue:
-                    issues_found.append(("lip_sync", 0.95, "ffmpeg"))
-                    video_issue_found = True
-
-                if has_top_artifact:
-                    issues_found.append(("top_artifact", 1.0, "opencv"))
-                    video_issue_found = True
-
-            if not video_issue_found:
-                # 2. To avoid massive overhead, only run AI Analysis (moondream) occasionally.
-                # Sample every 5th frame (e.g., 1 check every 5 seconds).
-                if index % 5 == 0:
-                    ai_results = await analyze_frame_ai(frame_path, model="moondream")
-
-                    if ai_results.get("is_slate"):
-                        issues_found.append(
-                            ("slate", ai_results.get("confidence", 0.85), "quick_ai"))
+                else:
+                    if is_frozen:
+                        issues_found.append(("frozen_screen", 1.0, "ffmpeg"))
                         video_issue_found = True
-                    else:
-                        # 3. If Moondream does NOT detect anything, fallback to heavier
-                        # LLaVA for double check
-                        fallback_ai_results = await analyze_frame_ai(frame_path, model="llava")
-                        if fallback_ai_results.get("is_slate"):
+
+                    if cv_results.get("is_bars"):
+                        issues_found.append(("bars_and_tone", 1.0, "opencv"))
+                        video_issue_found = True
+
+                    if cv_results.get("is_snowflakes"):
+                        issues_found.append(("snowflakes", 1.0, "opencv"))
+                        video_issue_found = True
+
+                    if cv_results.get("is_blurry"):
+                        issues_found.append(("blur", 1.0, "opencv"))
+                        video_issue_found = True
+
+                    if macro_confidence >= 0.50 and cv_results.get("laplacian_variance", 0) > 30.0:
+                        issues_found.append(("macroblocking", round(macro_confidence, 2), "opencv"))
+                        video_issue_found = True
+
+                    if has_lip_sync_issue:
+                        issues_found.append(("lip_sync", 0.95, "ffmpeg"))
+                        video_issue_found = True
+
+                    if has_top_artifact:
+                        issues_found.append(("top_artifact", 1.0, "opencv"))
+                        video_issue_found = True
+
+                if not video_issue_found:
+                    # 2. To avoid massive overhead, only run AI Analysis (moondream) occasionally.
+                    # Sample every 5th frame (e.g., 1 check every 5 seconds).
+                    if index % 5 == 0:
+                        ai_results = await analyze_frame_ai(frame_path, model="moondream")
+
+                        if ai_results.get("is_slate"):
                             issues_found.append(
-                                ("slate", fallback_ai_results.get("confidence", 0.85), "heavy_ai"))
+                                ("slate", ai_results.get("confidence", 0.85), "quick_ai"))
                             video_issue_found = True
+                        else:
+                            # 3. If Moondream does NOT detect anything, fallback to heavier
+                            # LLaVA for double check
+                            fallback_ai_results = await analyze_frame_ai(frame_path, model="llava")
+                            if fallback_ai_results.get("is_slate"):
+                                issues_found.append(
+                                    ("slate", fallback_ai_results.get("confidence", 0.85), "heavy_ai"))
+                                video_issue_found = True
 
-            if len(issues_found) == 0:
-                issues_found.append(("ok", 1.0, "opencv"))
+                if len(issues_found) == 0:
+                    issues_found.append(("ok", 1.0, "opencv"))
 
-            # Add entries to DB
-            # To simulate the network log requirement ("source, backbone, dest")
-            for issue_type, confidence, engine in issues_found:
-                log_entry = VideoLog(
-                    video_filename=video_filename,
-                    timestamp_sec=timestamp_sec,
-                    node_source="Primary-Ingest-A",
-                    node_backbone="East-Backbone-2",
-                    node_dest="Distribution-Node",
-                    issue_type=issue_type,
-                    issue_score=confidence,
-                    analysis_engine=engine,
-                    thumbnail_path=frame_file
-                )
+                # Create DB entries list
+                entries = []
+                # To simulate the network log requirement ("source, backbone, dest")
+                for issue_type, confidence, engine in issues_found:
+                    entries.append(VideoLog(
+                        video_filename=video_filename,
+                        timestamp_sec=timestamp_sec,
+                        node_source="Primary-Ingest-A",
+                        node_backbone="East-Backbone-2",
+                        node_dest="Distribution-Node",
+                        issue_type=issue_type,
+                        issue_score=confidence,
+                        analysis_engine=engine,
+                        thumbnail_path=frame_file
+                    ))
+                return entries
+
+        # run frame processing concurrently
+        tasks = [process_frame(idx, f) for idx, f in enumerate(frame_files)]
+        frame_logs_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for logs in frame_logs_lists:
+            if isinstance(logs, Exception):
+                print(f"Exception during frame processing: {logs}")
+                continue
+            for log_entry in logs:
                 db.add(log_entry)
 
         db.commit()
