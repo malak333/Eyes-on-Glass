@@ -191,4 +191,60 @@ final class TSDemuxer_Tests: XCTestCase {
              XCTAssertEqual(emittedNalUnits[2][4], 0x33)
         }
     }
+    
+    func testTSDemuxerAudio0xBDExtraction() throws {
+        // Enforces Code Style Guide Rule 1: Automated testing for the audio detection fix.
+        // Validates that Private Stream 1 (0xBD), commonly used for AC-3 audio, is correctly identified as an audio stream.
+        let demuxer = TSDemuxer()
+        
+        var audioPacket = Data(repeating: 0x00, count: 188)
+        audioPacket[0] = 0x47
+        audioPacket[1] = 0x41
+        audioPacket[2] = 0x01 // PID = 0x0101
+        audioPacket[3] = 0x10
+        
+        // PES Header for Audio (0xBD - Private Stream 1)
+        audioPacket[4] = 0x00
+        audioPacket[5] = 0x00
+        audioPacket[6] = 0x01
+        audioPacket[7] = 0xBD // stream_id 0xBD (AC-3 Audio)
+        audioPacket[8] = 0x00
+        audioPacket[9] = 0x00
+        audioPacket[10] = 0x80
+        audioPacket[11] = 0x00
+        audioPacket[12] = 0x00
+        
+        // Payload
+        audioPacket[13] = 0x01
+        audioPacket[14] = 0x02
+        audioPacket[15] = 0x03
+        
+        // We will send this packet, then we MUST send a second PES packet to flush the buffer
+        let events1 = demuxer.process(data: audioPacket)
+        
+        var secondPacket = Data(repeating: 0x00, count: 188)
+        secondPacket[0] = 0x47
+        secondPacket[1] = 0x41 // Trigger buffer flush
+        secondPacket[2] = 0x01 // Same PID
+        secondPacket[3] = 0x11
+        secondPacket[4] = 0x00; secondPacket[5] = 0x00; secondPacket[6] = 0x01; secondPacket[7] = 0xBD
+        
+        let events2 = demuxer.process(data: secondPacket)
+        
+        var emittedAudioFrames: [Data] = []
+        for event in (events1 + events2) {
+            if case .audio(let frame, _) = event {
+                emittedAudioFrames.append(frame)
+            }
+        }
+        
+        // Should find exactly 1 audio frame representing the first packet's payload
+        XCTAssertEqual(emittedAudioFrames.count, 1)
+        if let firstAudio = emittedAudioFrames.first {
+            XCTAssertGreaterThanOrEqual(firstAudio.count, 3)
+            XCTAssertEqual(firstAudio[0], 0x01)
+            XCTAssertEqual(firstAudio[1], 0x02)
+            XCTAssertEqual(firstAudio[2], 0x03)
+        }
+    }
 }
