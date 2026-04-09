@@ -16,6 +16,7 @@ public actor StreamMonitor {
     
     // Callback to pass the successfully evaluated frame back out
     private var onSyncedCallback: ((CVPixelBuffer) -> Void)?
+    private var lastProcessedPTS: Int64? = nil
     
     public init() {}
     
@@ -68,16 +69,31 @@ public actor StreamMonitor {
         audioBuffer.removeAll(where: { highestPTS - $0.0 > staleThresholdTicks * 2 })
     }
     
+    private var skipCount = 0
+    
     private func evaluateIntegrity(pts: Int64, video: VideoHealth, audio: AudioHealth) {
-        // Core decision engine logic
-        // This confirms strict PTS sync was achieved or timeout handled
-        
-        // Print roughly once a second (90000 ticks)
-        if pts % 90000 < 3000 {
-            print("StreamMonitor: Sync Validated! PTS: \(pts) | Video: Healthy | Audio: \(audio == .healthy ? "Healthy" : "Silent")")
+        let shouldProcess: Bool
+        if let last = lastProcessedPTS {
+            // Check if 1 second elapsed (90,000 ticks), or if PTS jumped backwards (stream loop/reset)
+            shouldProcess = (pts - last >= 90000) || (pts < last - 90000)
+            
+            if !shouldProcess {
+                skipCount += 1
+                if skipCount % 30 == 0 {
+                    print("StreamMonitor: Skipping frame. PTS: \(pts) | Last PTS: \(last) | Diff: \(pts - last)")
+                }
+            }
+        } else {
+            shouldProcess = true
         }
         
-        // Continue the pipeline
-        onSyncedCallback?(video.frame)
+        if shouldProcess {
+            lastProcessedPTS = pts
+            skipCount = 0
+            print("StreamMonitor: Sync Validated! PTS: \(pts) | Video: Healthy | Audio: \(audio == .healthy ? "Healthy" : "Silent")")
+            
+            // Continue the pipeline at 1 FPS
+            onSyncedCallback?(video.frame)
+        }
     }
 }

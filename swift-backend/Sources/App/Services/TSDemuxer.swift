@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TSDemuxerEvent {
-    case nalUnit(Data, pts: Int64)
+    case nalUnit(Data, pts: Int64, dts: Int64?)
     case audio(Data, pts: Int64)
     case discontinuity
 }
@@ -23,6 +23,7 @@ public class TSDemuxer {
     private var lockedAudioPID: UInt16? = nil
     
     private var currentVideoPTS: Int64 = 0
+    private var currentVideoDTS: Int64? = nil
     private var currentAudioPTS: Int64 = 0
     
     private var currentEvents: [TSDemuxerEvent] = []
@@ -84,11 +85,17 @@ public class TSDemuxer {
                         print("TSDemuxer: Locked onto Video PID 0x\(String(pid, radix: 16))")
                     }
                     if lockedVideoPID == pid {
-                         if let parsedPts = extractPTS(from: payload) { currentVideoPTS = parsedPts }
+                         let oldVideoPTS = currentVideoPTS
+                         let oldVideoDTS = currentVideoDTS
+                         if let parsedPtsDts = extractPTSAndDTS(from: payload) { 
+                             currentVideoPTS = parsedPtsDts.0
+                             currentVideoDTS = parsedPtsDts.1
+                         }
                          let start = getPESPayloadStart(from: payload)
                          if start < payload.count {
+                             let boundary = videoStreamBuffer.endIndex
                              videoStreamBuffer.append(payload.suffix(from: start))
-                             extractNALUnits()
+                             extractNALUnits(boundary: boundary, oldPts: oldVideoPTS, oldDts: oldVideoDTS)
                              isGatheringVideoPES = true
                          } else if start == payload.count {
                              isGatheringVideoPES = true
@@ -100,7 +107,11 @@ public class TSDemuxer {
                         print("TSDemuxer: Locked onto Audio PID 0x\(String(pid, radix: 16))")
                     }
                     if lockedAudioPID == pid {
-                         if let parsedPts = extractPTS(from: payload) { currentAudioPTS = parsedPts }
+                         if isGatheringAudioPES && !audioStreamBuffer.isEmpty {
+                             currentEvents.append(.audio(Data(audioStreamBuffer), pts: currentAudioPTS))
+                             audioStreamBuffer.removeAll()
+                         }
+                         if let parsedPtsDts = extractPTSAndDTS(from: payload) { currentAudioPTS = parsedPtsDts.0 }
                          let start = getPESPayloadStart(from: payload)
                          if start < payload.count {
                              audioStreamBuffer.append(payload.suffix(from: start))
@@ -114,8 +125,9 @@ public class TSDemuxer {
             }
         } else {
             if isGatheringVideoPES && lockedVideoPID == pid {
+                let boundary = videoStreamBuffer.endIndex
                 videoStreamBuffer.append(payload)
-                extractNALUnits()
+                extractNALUnits(boundary: boundary, oldPts: currentVideoPTS, oldDts: currentVideoDTS)
             } else if isGatheringAudioPES && lockedAudioPID == pid {
                 audioStreamBuffer.append(payload)
                 extractAudioFrames()
@@ -163,7 +175,7 @@ public class TSDemuxer {
         return payload.count
     }
     
-    private func extractPTS(from payload: Data) -> Int64? {
+    private func extractPTSAndDTS(from payload: Data) -> (Int64, Int64?)? {
         if payload.count > 13 {
             let ptsDtsFlags = (payload[7] & 0xC0) >> 6
             if ptsDtsFlags == 0x2 || ptsDtsFlags == 0x3 {
@@ -172,13 +184,25 @@ public class TSDemuxer {
                 let pts3 = Int64(payload[11] & 0xFE) << 14
                 let pts4 = Int64(payload[12]) << 7
                 let pts5 = Int64(payload[13] & 0xFE) >> 1
-                return pts1 | pts2 | pts3 | pts4 | pts5
+                let pts = pts1 | pts2 | pts3 | pts4 | pts5
+                
+                var dts: Int64? = nil
+                if ptsDtsFlags == 0x3 && payload.count > 18 {
+                    let dts1 = Int64(payload[14] & 0x0E) << 29
+                    let dts2 = Int64(payload[15]) << 22
+                    let dts3 = Int64(payload[16] & 0xFE) << 14
+                    let dts4 = Int64(payload[17]) << 7
+                    let dts5 = Int64(payload[18] & 0xFE) >> 1
+                    dts = dts1 | dts2 | dts3 | dts4 | dts5
+                }
+                
+                return (pts, dts)
             }
         }
         return nil
     }
     
-    private func extractNALUnits() {
+    private func extractNALUnits(boundary: Int, oldPts: Int64, oldDts: Int64?) {
         var startOffset = videoStreamBuffer.startIndex
         while startOffset < videoStreamBuffer.endIndex - 4 {
             var nalStart = -1
@@ -225,7 +249,11 @@ public class TSDemuxer {
             }
             
             let nalUnit = videoStreamBuffer[nalStart..<nextNalStart]
-            currentEvents.append(.nalUnit(Data(nalUnit), pts: currentVideoPTS))
+            
+            let ptsToUse = nalStart < boundary ? oldPts : currentVideoPTS
+            let dtsToUse = nalStart < boundary ? oldDts : currentVideoDTS
+            
+            currentEvents.append(.nalUnit(Data(nalUnit), pts: ptsToUse, dts: dtsToUse))
             startOffset = nextNalStart
         }
         
@@ -252,6 +280,7 @@ public class TSDemuxer {
         lockedVideoPID = nil
         lockedAudioPID = nil
         currentVideoPTS = 0
+        currentVideoDTS = nil
         currentAudioPTS = 0
     }
 }

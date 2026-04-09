@@ -98,5 +98,38 @@ final class StreamMonitor_Tests: XCTestCase {
         
         await fulfillment(of: [expectation1, expectation2], timeout: 1.0)
     }
+    
+    func testStrict1FPSRateLimiting() async throws {
+        // Enforces rule 1: Automated testing for the StreamMonitor 1-FPS governor
+        let monitor = StreamMonitor()
+        
+        let cvPixelBufferAttrs = [kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue,
+                                  kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue] as CFDictionary
+        var pixelBufferOut: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, 100, 100, kCVPixelFormatType_32BGRA, cvPixelBufferAttrs, &pixelBufferOut)
+        
+        guard let frame = pixelBufferOut else {
+            XCTFail("Failed to create mock pixel buffer")
+            return
+        }
+        
+        var callbackCount = 0
+        await monitor.setOnSynced { _ in
+            callbackCount += 1
+        }
+        
+        // Simulating exactly 30 frames arriving within a 1-second window (90,000 / 30 = 3000 ticks per frame)
+        // Since we enforced 1-FPS rate limiting via `(pts - lastProcessedPTS >= 90000)`, it should only fire ONCE!
+        let basePTS: Int64 = 100_000
+        for i in 0..<30 {
+            let pts = basePTS + Int64(i * 3000)
+            await monitor.report(pts: pts, video: VideoHealth(frame: frame), audio: .healthy)
+        }
+        
+        // Send a 31st frame exactly 1 second (90000 ticks) after the first one to trigger the second callback
+        await monitor.report(pts: basePTS + 90000, video: VideoHealth(frame: frame), audio: .healthy)
+        
+        // Verify only 2 frames made it out (the first one, and the one exactly 1 second later)
+        XCTAssertEqual(callbackCount, 2, "StreamMonitor must aggressively cull frames and strictly output exactly 1 FPS (1 callback per 90,000 PTS ticks)")
+    }
 }
-

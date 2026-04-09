@@ -172,8 +172,8 @@ public actor UDPIngestor {
         let events = demuxer.process(data: data)
         for event in events {
             switch event {
-            case .nalUnit(let nal, let pts):
-                videoDecoder.decode(nalUnit: nal, pts: pts)
+            case .nalUnit(let nal, let pts, let dts):
+                videoDecoder.decode(nalUnit: nal, pts: pts, dts: dts)
             case .audio(let audio, let pts):
                 audioDecoder.decode(audioPayload: audio, pts: pts)
             case .discontinuity:
