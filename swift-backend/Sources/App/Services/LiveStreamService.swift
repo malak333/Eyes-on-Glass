@@ -31,9 +31,11 @@ actor LiveStreamService {
         let newIngestor = UDPIngestor()
         self.ingestor = newIngestor
         
-        await newIngestor.start(uri: uri) { pixelBuffer in
-            Task {
-                await self.processFrame(pixelBuffer: pixelBuffer, sessionName: sessionName, thumbnailsDir: thumbnailsDir, db: db, logger: logger, client: client)
+        Task {
+            await newIngestor.start(uri: uri) { pixelBuffer in
+                Task {
+                    await self.processFrame(pixelBuffer: pixelBuffer, sessionName: sessionName, thumbnailsDir: thumbnailsDir, db: db, logger: logger, client: client)
+                }
             }
         }
         logger.info("LiveStreamService: UDPIngestor started for \(uri)")

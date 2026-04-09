@@ -158,7 +158,7 @@ public class H264Decoder {
         var sampleBuffer: CMSampleBuffer?
         var sampleSizeArray = [totalSize]
         
-        var timingInfo = CMSampleTimingInfo(
+        let timingInfo = CMSampleTimingInfo(
             duration: CMTime.invalid,
             presentationTimeStamp: CMTime(value: pts, timescale: 90000),
             decodeTimeStamp: CMTime.invalid
@@ -183,7 +183,7 @@ public class H264Decoder {
         let decodeStatus = VTDecompressionSessionDecodeFrame(
             session,
             sampleBuffer: sample,
-            flags: [._EnableAsynchronousDecompression],
+            flags: [], // Synchronous decode, necessary in Vapor without runloop
             frameRefcon: nil,
             infoFlagsOut: &flagsOut
         )

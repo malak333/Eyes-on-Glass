@@ -76,7 +76,7 @@ public class TSDemuxer {
             if payload.count > 6 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01 {
                 let streamID = payload[3]
                 let isVideo = streamID >= 0xE0 && streamID <= 0xEF
-                let isAudio = streamID >= 0xC0 && streamID <= 0xDF
+                let isAudio = (streamID >= 0xC0 && streamID <= 0xDF) || streamID == 0xBD
                 
                 if isVideo {
                     if lockedVideoPID == nil {
