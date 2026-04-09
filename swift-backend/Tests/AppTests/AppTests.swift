@@ -188,13 +188,19 @@ final class AppTests: XCTestCase {
         let rootDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).deletingLastPathComponent()
         let blackVideoURI = rootDir.appendingPathComponent("test_black.mp4").path
         
-        // Execute LiveStream service on the file
-        await LiveStreamService.shared.startMonitoring(uri: blackVideoURI, sessionName: "test_black_stream", db: app.db, logger: app.logger, client: app.client)
+        let ffmpegProcess = Process()
+        ffmpegProcess.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        ffmpegProcess.arguments = ["ffmpeg", "-re", "-stream_loop", "-1", "-i", blackVideoURI, "-c", "copy", "-f", "mpegts", "udp://127.0.0.1:9998"]
+        try? ffmpegProcess.run()
+        
+        // Execute LiveStream service on the local UDP port
+        await LiveStreamService.shared.startMonitoring(uri: "udp://127.0.0.1:9998", sessionName: "test_black_stream", db: app.db, logger: app.logger, client: app.client)
         
         // Give it 3 seconds to process a few FPS frames
         try await Task.sleep(nanoseconds: 3_000_000_000)
         
         await LiveStreamService.shared.stopMonitoring()
+        ffmpegProcess.terminate()
         
         // Verify VideoLogs have been populated with "black_screen" and uniquely named 'live_...' thumbnails
         let logs = try await VideoLog.query(on: app.db).all()
