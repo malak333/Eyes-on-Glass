@@ -168,7 +168,7 @@ struct VisionAnalyzer: Sendable {
         let mLap = lapSum / Float(max(1, lapCount))
         let laplacianVar = (lapSqSum / Float(max(1, lapCount))) - (mLap * mLap)
         
-        let isBlurry = laplacianVar < 300.0 && stdDev > 10.0
+        let isBlurry = laplacianVar < 100.0 && stdDev > 10.0
         
         let tLap = topLapSum / Float(max(1, topCount))
         let topLaplacianVar = (topLapSqSum / Float(max(1, topCount))) - (tLap * tLap)
@@ -180,7 +180,7 @@ struct VisionAnalyzer: Sendable {
         let mY = sySum / cF
         let varY = max(0, (sySqSum / cF) - (mY * mY))
         
-        let isBars = varY < 2000.0 && varX > 500.0 && varX > varY * 0.5
+        let isBars = varY < 100.0 && varX > 1000.0 && varX > varY * 10.0
         
         let hBM8 = hDiffBound8 / Float(max(1, hBCount8))
         let hNBM8 = hDiffNonBound8 / Float(max(1, hNBCount8))
@@ -203,7 +203,7 @@ struct VisionAnalyzer: Sendable {
         
         let blockiness = max(maxBlock8, maxBlock16)
         
-        let isSnowflakes = stdDev > 20.0 && laplacianVar > 500.0 && blockiness < 2.0
+        let isSnowflakes = stdDev > 30.0 && laplacianVar > 2000.0 && blockiness < 2.0 && (max(varX, varY) > 0 ? abs(varX - varY) / max(varX, varY) < 0.2 : false)
         
         return ValidationMetrics(
             meanBrightness: meanBrightness,

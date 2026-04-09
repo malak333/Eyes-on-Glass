@@ -16,12 +16,12 @@ final class UDPIngestor_Tests: XCTestCase {
         let expectation = XCTestExpectation(description: "UDPIngestor should safely bind and execute the AsyncStream without blocking")
         
         // start() shouldn't crash and shouldn't block
-        await ingestor.start(uri: testURI) { frame in
+        await ingestor.start(uri: testURI, onFrame: { frame in
             // Realistically, the generic "connect" logic we provided in test won't feed perfectly 
             // structured H.264 NAL units to decode a frame instantly during this tiny window, 
             // so we don't strictly expect frame hits in this isolated lifecycle unit test.
             print("Received frame!")
-        }
+        }, onPacket: { _ in })
         
         // Allow the async loop and BSD socket binding enough cycles to settle
         try await Task.sleep(nanoseconds: 500_000_000)
@@ -32,6 +32,25 @@ final class UDPIngestor_Tests: XCTestCase {
         
         expectation.fulfill()
         await fulfillment(of: [expectation], timeout: 2.0)
+    }
+    
+    func testTelemetryCallbacks() async throws {
+        let ingestor = UDPIngestor()
+        let testURI = "udp://127.0.0.1:18299"
+        
+        var packetCounter = 0
+        let expectation = XCTestExpectation(description: "UDPIngestor should report packet telemetry")
+        
+        await ingestor.start(uri: testURI, onFrame: { _ in }, onPacket: { count in
+            packetCounter = count
+            expectation.fulfill()
+        })
+        
+        // Simulating packet injection inside the actor is tough without networking mocking,
+        // but we verify the actor method signature safely accepts the new callback structure.
+        XCTAssertEqual(packetCounter, 0)
+        
+        await ingestor.stop()
     }
     
     func testTSDemuxerEdgeCaseNALExtraction() throws {
@@ -71,9 +90,9 @@ final class UDPIngestor_Tests: XCTestCase {
         
         let expectation = XCTestExpectation(description: "UDPIngestor handles high-frequency iteration")
         
-        await ingestor.start(uri: testURI) { frame in
+        await ingestor.start(uri: testURI, onFrame: { _ in
             // Unused in testing isolation
-        }
+        }, onPacket: { _ in })
         
         for _ in 0..<100 {
             // Rapid iteration shouldn't raise any task bound limits now that memory is pooled

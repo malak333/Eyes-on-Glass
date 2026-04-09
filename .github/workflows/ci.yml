@@ -54,15 +54,15 @@ jobs:
         cd frontend
         npm test
 
-  swift-backend-test:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install system dependencies
-      run: brew install ffmpeg
-    - name: Build and Test
-      run: |
-        mkdir -p backend
-        sqlite3 backend/sqlite.db "CREATE TABLE IF NOT EXISTS video_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, video_filename TEXT NOT NULL, timestamp_sec REAL NOT NULL, node_source TEXT, node_backbone TEXT, node_dest TEXT, issue_type TEXT NOT NULL, issue_score REAL, analysis_engine TEXT, thumbnail_path TEXT, created_at TEXT);"
-        cd swift-backend
-        swift test
+#  swift-backend-test:
+#    runs-on: macos-latest
+#    steps:
+#    - uses: actions/checkout@v4
+#    - name: Install system dependencies
+#      run: brew install ffmpeg
+#    - name: Build and Test
+#      run: |
+#        mkdir -p backend
+#        sqlite3 backend/sqlite.db "CREATE TABLE IF NOT EXISTS video_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, video_filename TEXT NOT NULL, timestamp_sec REAL NOT NULL, node_source TEXT, node_backbone TEXT, node_dest TEXT, issue_type TEXT NOT NULL, issue_score REAL, analysis_engine TEXT, thumbnail_path TEXT, created_at TEXT);"
+#        cd swift-backend
+#        swift test

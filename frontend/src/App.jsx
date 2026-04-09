@@ -159,35 +159,38 @@ function App() {
         </section>
       )}
 
-      {activeTab === 'active' && processingFile && progressData[processingFile] && progressData[processingFile].status !== 'error' && (
+      {activeTab === 'active' && activeFilename && progressData[activeFilename] && progressData[activeFilename].status !== 'error' && (
         <section className="glass-panel animate-fade-in" style={{ marginBottom: '2rem' }}>
           <h2 style={{ marginTop: 0, fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {progressData[processingFile].status === 'completed' ? (
+            {progressData[activeFilename].status === 'completed' ? (
               <CheckCircle size={20} color="var(--primary-color)" />
             ) : (
               <Activity size={20} className="spinning" color="var(--primary-color)" />
             )}
-            Analysis: <span style={{ color: 'var(--primary-color)' }}>{processingFile}</span>
+            Analysis: <span style={{ color: 'var(--primary-color)' }}>{activeFilename}</span>
           </h2>
           <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '8px', padding: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-              <span>Status: <strong style={{ textTransform: 'capitalize', color: 'var(--text-main)' }}>{progressData[processingFile].status}</strong></span>
+              <span>Status: <strong style={{ textTransform: 'capitalize', color: 'var(--text-main)' }}>{progressData[activeFilename].status}</strong></span>
               <span>
-                {progressData[processingFile].status === 'completed' && progressData[processingFile].total_time ? (
-                  <>Time Taken: {progressData[processingFile].total_time}s &bull; </>
-                ) : progressData[processingFile].start_time && progressData[processingFile].status !== 'completed' ? (
-                  <>Elapsed Time: <Timer startTime={progressData[processingFile].start_time} /> &bull; </>
+                {progressData[activeFilename].status === 'completed' && progressData[activeFilename].total_time ? (
+                  <>Time Taken: {progressData[activeFilename].total_time}s &bull; </>
+                ) : progressData[activeFilename].start_time && progressData[activeFilename].status !== 'completed' ? (
+                  <>Elapsed Time: <Timer startTime={progressData[activeFilename].start_time} /> &bull; </>
                 ) : null}
-                {progressData[processingFile].current} / {progressData[processingFile].total} Frames Processed
+                {progressData[activeFilename].packets !== undefined && (
+                  <>{progressData[activeFilename].packets} Packets &bull; </>
+                )}
+                {progressData[activeFilename].current} / {progressData[activeFilename].status === 'extracting' ? '...' : progressData[activeFilename].total} Frames Processed
               </span>
             </div>
             <div style={{ width: '100%', background: 'rgba(255,255,255,0.1)', height: '12px', borderRadius: '6px', overflow: 'hidden' }}>
               <div style={{
                 height: '100%',
                 background: 'var(--primary-color)',
-                width: `${progressData[processingFile].total > 0 ? (progressData[processingFile].current / progressData[processingFile].total) * 100 : (progressData[processingFile].status === 'extracting' ? 100 : 0)}%`,
+                width: `${progressData[activeFilename].total > 0 ? (progressData[activeFilename].current / progressData[activeFilename].total) * 100 : (progressData[activeFilename].status === 'extracting' ? 100 : 0)}%`,
                 transition: 'width 0.5s ease-out'
-              }} className={progressData[processingFile].status === 'extracting' ? 'progress-pulse' : ''} />
+              }} className={progressData[activeFilename].status === 'extracting' ? 'progress-pulse' : ''} />
             </div>
           </div>
         </section>

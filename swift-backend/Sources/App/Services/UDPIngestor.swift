@@ -20,14 +20,17 @@ public actor UDPIngestor {
     
     // Callback for LiveStreamService
     private var onFrameCallback: ((CVPixelBuffer) -> Void)?
+    private var onPacketCallback: ((Int) -> Void)?
     private var bridge: IngestorBridge?
+    private var packetCount: Int = 0
     
     public init() {}
     
-    public func start(uri: String, onFrame: @escaping (CVPixelBuffer) -> Void) async {
+    public func start(uri: String, onFrame: @escaping (CVPixelBuffer) -> Void, onPacket: @escaping (Int) -> Void) async {
         guard !isActive else { return }
         isActive = true
         self.onFrameCallback = onFrame
+        self.onPacketCallback = onPacket
         
         await streamMonitor.setOnSynced { [weak self] frame in
             guard let self = self else { return }
@@ -72,6 +75,7 @@ public actor UDPIngestor {
         
         demuxer.reset()
         videoDecoder.reset()
+        packetCount = 0
     }
     
     private func parseURI(_ uri: String) -> (Bool, String, UInt16)? {
@@ -155,6 +159,10 @@ public actor UDPIngestor {
                 autoreleasepool {
                     let bytesRead = recv(fd, &buffer, buffer.count, 0)
                     if bytesRead > 0 {
+                        self.packetCount += 1
+                        if self.packetCount % 50 == 0 {
+                            self.onPacketCallback?(self.packetCount)
+                        }
                         let data = Data(buffer.prefix(bytesRead))
                         continuation?.yield(data)
                     } else {
@@ -177,7 +185,10 @@ public actor UDPIngestor {
             case .audio(let audio, let pts):
                 audioDecoder.decode(audioPayload: audio, pts: pts)
             case .discontinuity:
-                videoDecoder.reset()
+                print("UDPIngestor: Stream discontinuity detected. Allowing H264Decoder to adapt.")
+                // We intentionally DO NOT reset the H264Decoder here.
+                // VTDecompressionSession can survive minor drops, and resetting requires an IDR frame 
+                // which might not arrive for 30s, causing us to drop thousands of P-frames.
             }
         }
     }

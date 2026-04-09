@@ -32,11 +32,15 @@ actor LiveStreamService {
         self.ingestor = newIngestor
         
         Task {
-            await newIngestor.start(uri: uri) { pixelBuffer in
+            await newIngestor.start(uri: uri, onFrame: { pixelBuffer in
                 Task {
                     await self.processFrame(pixelBuffer: pixelBuffer, sessionName: sessionName, thumbnailsDir: thumbnailsDir, db: db, logger: logger, client: client)
                 }
-            }
+            }, onPacket: { count in
+                Task {
+                    await ExtractionProgress.shared.setPackets(count, for: sessionName)
+                }
+            })
         }
         logger.info("LiveStreamService: UDPIngestor started for \(uri)")
     }
