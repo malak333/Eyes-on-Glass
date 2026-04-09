@@ -88,7 +88,7 @@ final class TSDemuxer_Tests: XCTestCase {
         
         let events1 = demuxer.process(data: secondPacket)
         let nals1 = events1.compactMap { event -> Data? in
-            if case .nalUnit(let data) = event { return data }
+            if case .nalUnit(let data, _) = event { return data }
             return nil
         }
         
@@ -115,7 +115,7 @@ final class TSDemuxer_Tests: XCTestCase {
         
         let events2 = demuxer.process(data: thirdPacket)
         let nals2 = events2.compactMap { event -> Data? in
-            if case .nalUnit(let data) = event { return data }
+            if case .nalUnit(let data, _) = event { return data }
             return nil
         }
         
@@ -178,7 +178,7 @@ final class TSDemuxer_Tests: XCTestCase {
         
         var emittedNalUnits: [Data] = []
         for event in (events1 + events2) {
-            if case .nalUnit(let nal) = event {
+            if case .nalUnit(let nal, _) = event {
                 emittedNalUnits.append(nal)
             }
         }

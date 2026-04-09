@@ -6,7 +6,7 @@ import LogViewer from './LogViewer';
 describe('LogViewer Component', () => {
   test('renders "No logs collected yet." when empty', () => {
     render(<LogViewer logs={[]} apiUrl="http://localhost:8080" />);
-    expect(screen.getByText('No logs collected yet.')).toBeInTheDocument();
+    expect(screen.getByText('No logs collected yet.')).toBeTruthy();
   });
 
   test('reverses the logs so that the newest ones are displayed at the top', () => {
@@ -39,7 +39,7 @@ describe('LogViewer Component', () => {
     render(<LogViewer logs={logs} apiUrl="http://localhost:8080" />);
     
     // black_screen should be present
-    expect(screen.getByText('BLACK SCREEN')).toBeInTheDocument();
+    expect(screen.getByText('BLACK SCREEN')).toBeTruthy();
     
     // "ok" logs should NOT be present if there are issues
     const okElements = screen.queryAllByText('OK');

@@ -39,7 +39,7 @@ final class UDPIngestor_Tests: XCTestCase {
         // even if they are positioned EXACTLY at the end of the byte array payload buffer.
         
         // Reflect an array of generic data with multiple `00 00 01` start sequences
-        var testPayload: [UInt8] = [
+        let testPayload: [UInt8] = [
             0x00, 0x00, 0x01, 0x07, 0xFF, 0xFF, 0xFF, // First NAL near start (SPS example)
             0xAA, 0xBB, 0xCC, 0xDD,
             0x00, 0x00, 0x01                          // Second NAL exactly at the trailing edge (often caused off-by-one bugs)

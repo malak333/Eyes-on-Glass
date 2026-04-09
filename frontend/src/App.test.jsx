@@ -40,6 +40,9 @@ describe('App component', () => {
       if (url.includes('/logs')) {
         return Promise.resolve({ json: () => Promise.resolve(mockLogs) });
       }
+      if (url.includes('/progress')) {
+        return Promise.resolve({ json: () => Promise.resolve({ 'fileC.ts': { status: 'extracting', current: 10, total: 100 } }) });
+      }
       return Promise.resolve({ json: () => Promise.resolve({}) });
     });
 
