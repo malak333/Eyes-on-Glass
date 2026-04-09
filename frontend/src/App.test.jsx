@@ -4,7 +4,7 @@ import App from './App';
 
 describe('App component', () => {
   beforeEach(() => {
-    global.fetch = vi.fn();
+    globalThis.fetch = vi.fn();
   });
 
   afterEach(() => {
@@ -12,7 +12,7 @@ describe('App component', () => {
   });
 
   it('renders without crashing', async () => {
-    global.fetch.mockResolvedValue({
+    globalThis.fetch.mockResolvedValue({
       json: () => Promise.resolve({ logs: [] })
     });
     const { container } = render(<App />);
@@ -36,7 +36,7 @@ describe('App component', () => {
       ]
     };
     
-    global.fetch.mockImplementation((url) => {
+    globalThis.fetch.mockImplementation((url) => {
       if (url.includes('/logs')) {
         return Promise.resolve({ json: () => Promise.resolve(mockLogs) });
       }

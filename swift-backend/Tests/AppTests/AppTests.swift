@@ -141,6 +141,9 @@ final class AppTests: XCTestCase {
     
     func testLiveStreamMonitoringEndpoints() async throws {
         let app = Application(.testing)
+        let customPool = NIOThreadPool(numberOfThreads: 2)
+        customPool.start()
+        app.threadPool = customPool
         defer { app.shutdown() }
         try await configure(app)
         
@@ -174,6 +177,9 @@ final class AppTests: XCTestCase {
     
     func testLiveStreamThumbnailRetention() async throws {
         let app = Application(.testing)
+        let customPool = NIOThreadPool(numberOfThreads: 2)
+        customPool.start()
+        app.threadPool = customPool
         defer { app.shutdown() }
         try await configure(app)
         
@@ -221,6 +227,9 @@ final class AppTests: XCTestCase {
     }
     func testLiveStreamTimestampsAndCreatedAt() async throws {
         let app = Application(.testing)
+        let customPool = NIOThreadPool(numberOfThreads: 2)
+        customPool.start()
+        app.threadPool = customPool
         defer { app.shutdown() }
         try await configure(app)
         

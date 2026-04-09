@@ -8,7 +8,9 @@ public actor UDPIngestor {
     
     // Pipeline components
     private let demuxer = TSDemuxer()
-    private let decoder = H264Decoder()
+    private let videoDecoder = H264Decoder()
+    private let audioDecoder = AudioDecoder()
+    private let streamMonitor = StreamMonitor()
     
     // Timers
     private var lastPacketTime: TimeInterval = 0
@@ -27,9 +29,16 @@ public actor UDPIngestor {
         isActive = true
         self.onFrameCallback = onFrame
         
-        let newBridge = IngestorBridge(actor: self)
+        await streamMonitor.setOnSynced { [weak self] frame in
+            guard let self = self else { return }
+            Task { await self.forwardFrame(frame) }
+        }
+        
+        let newBridge = IngestorBridge(actor: self, monitor: streamMonitor)
         self.bridge = newBridge
-        decoder.delegate = newBridge
+        
+        videoDecoder.delegate = newBridge
+        audioDecoder.delegate = newBridge
         
         let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
         self.streamContinuation = continuation
@@ -62,7 +71,7 @@ public actor UDPIngestor {
         processingTask?.cancel()
         
         demuxer.reset()
-        decoder.reset()
+        videoDecoder.reset()
     }
     
     private func parseURI(_ uri: String) -> (Bool, String, UInt16)? {
@@ -95,8 +104,6 @@ public actor UDPIngestor {
         
         var reuse: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, socklen_t(MemoryLayout<Int32>.size))
-        
-        // Allow multiple bind on macOS (SO_REUSEADDR) for multicast
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
         
         var addr = sockaddr_in()
@@ -133,13 +140,11 @@ public actor UDPIngestor {
             print("UDPIngestor: Listening on Unicast \(uri)")
         }
         
-        // Make socket non-blocking for DispatchSourceRead
         let flags = fcntl(fd, F_GETFL, 0)
         _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         
         self.lastPacketTime = Date().timeIntervalSince1970
         
-        // Setup DispatchSourceRead for non-blocking receive
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue.global(qos: .userInitiated))
         let continuation = self.streamContinuation
         
@@ -167,10 +172,12 @@ public actor UDPIngestor {
         let events = demuxer.process(data: data)
         for event in events {
             switch event {
-            case .nalUnit(let nal):
-                decoder.decode(nalUnit: nal)
+            case .nalUnit(let nal, let pts):
+                videoDecoder.decode(nalUnit: nal, pts: pts)
+            case .audio(let audio, let pts):
+                audioDecoder.decode(audioPayload: audio, pts: pts)
             case .discontinuity:
-                decoder.reset()
+                videoDecoder.reset()
             }
         }
     }
@@ -185,7 +192,6 @@ public actor UDPIngestor {
                 if now - self.lastPacketTime > 5.0 {
                     if self.socketFD >= 0 {
                         print("UDPIngestor: Heartbeat timeout on \(uri). Resetting connection...")
-                        
                         if let source = self.readSource {
                             source.cancel()
                             self.readSource = nil
@@ -199,22 +205,30 @@ public actor UDPIngestor {
         }
     }
     
-    // Internal routing for delegates since delegates are class-bound
     fileprivate func forwardFrame(_ frame: CVPixelBuffer) {
         onFrameCallback?(frame)
     }
 }
 
-fileprivate class IngestorBridge: H264DecoderDelegate {
+fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
     weak var actor: UDPIngestor?
+    let monitor: StreamMonitor
     
-    init(actor: UDPIngestor) {
+    init(actor: UDPIngestor, monitor: StreamMonitor) {
         self.actor = actor
+        self.monitor = monitor
     }
     
-    func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer) {
-        Task { [weak actor] in
-            await actor?.forwardFrame(frame)
+    func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer, pts: Int64) {
+        Task {
+            let video = VideoHealth(frame: frame)
+            await monitor.report(pts: pts, video: video, audio: nil)
+        }
+    }
+    
+    func decoder(_ decoder: AudioDecoder, didDecodeHealth health: AudioHealth, pts: Int64) {
+        Task {
+            await monitor.report(pts: pts, video: nil, audio: health)
         }
     }
 }

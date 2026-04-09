@@ -163,7 +163,7 @@ final class TSDemuxer_Tests: XCTestCase {
         validPacket[26] = 0x01
         validPacket[27] = 0x33 // NAL 3
         
-        _ = demuxer.process(data: validPacket)
+        let events1 = demuxer.process(data: validPacket)
         
         // Provide termination NAL unit in the next packet
         var second = Data(repeating: 0x00, count: 188)
@@ -174,9 +174,10 @@ final class TSDemuxer_Tests: XCTestCase {
         second[4] = 0x00; second[5] = 0x00; second[6] = 0x01; second[7] = 0xE0; second[10] = 0x80
         second[13] = 0x00; second[14] = 0x00; second[15] = 0x00; second[16] = 0x01
         
-        let events = demuxer.process(data: second)
+        let events2 = demuxer.process(data: second)
+        
         var emittedNalUnits: [Data] = []
-        for event in events {
+        for event in (events1 + events2) {
             if case .nalUnit(let nal) = event {
                 emittedNalUnits.append(nal)
             }

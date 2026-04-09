@@ -5,7 +5,7 @@ import VideoUploader from './VideoUploader';
 describe('VideoUploader component', () => {
   it('calls onStopLive when live stream is stopped', async () => {
     // Mock fetch
-    global.fetch = vi.fn(() =>
+    globalThis.fetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
         json: () => Promise.resolve({}),

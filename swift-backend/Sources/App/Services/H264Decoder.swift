@@ -2,7 +2,7 @@ import Foundation
 import VideoToolbox
 
 public protocol H264DecoderDelegate: AnyObject {
-    func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer)
+    func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer, pts: Int64)
 }
 
 public class H264Decoder {
@@ -14,12 +14,9 @@ public class H264Decoder {
     private var sps: [UInt8]?
     private var pps: [UInt8]?
     
-    private var lastEmittedTime: TimeInterval = 0
-    private let emitInterval: TimeInterval = 1.0 // 1 Frame Per Second
-    
     public init() {}
     
-    public func decode(nalUnit: Data) {
+    public func decode(nalUnit: Data, pts: Int64) {
         // Strip the start code (0x00000001 or 0x000001)
         var startCodeLength = 0
         if nalUnit.count > 4, nalUnit[0] == 0, nalUnit[1] == 0, nalUnit[2] == 0, nalUnit[3] == 1 {
@@ -47,7 +44,7 @@ public class H264Decoder {
                 print("H264Decoder: Creating format description from SPS/PPS")
                 createFormatDescription()
             }
-            decodeFrame(nalPayload: nalPayload)
+            decodeFrame(nalPayload: nalPayload, pts: pts)
         default:
             break
         }
@@ -127,7 +124,7 @@ public class H264Decoder {
         }
     }
     
-    private func decodeFrame(nalPayload: [UInt8]) {
+    private func decodeFrame(nalPayload: [UInt8], pts: Int64) {
         guard let session = decompressionSession else { return }
         
         // Wrap NAL payload inside AVCC length-delimited format
@@ -163,7 +160,7 @@ public class H264Decoder {
         
         var timingInfo = CMSampleTimingInfo(
             duration: CMTime.invalid,
-            presentationTimeStamp: CMTime(value: Int64(Date().timeIntervalSince1970 * 1000), timescale: 1000),
+            presentationTimeStamp: CMTime(value: pts, timescale: 90000),
             decodeTimeStamp: CMTime.invalid
         )
         var timingInfoArray = [timingInfo]
@@ -205,16 +202,11 @@ public class H264Decoder {
     private let callback: VTDecompressionOutputCallback = {
         decompressionOutputRefCon, sourceFrameRefCon, status, infoFlags, imageBuffer, presentationTimeStamp, presentationDuration in
         
-        // print("H264Decoder: Output callback with status \(status)")
         guard status == noErr, let pixelBuffer = imageBuffer else { return }
         
         let decoder = Unmanaged<H264Decoder>.fromOpaque(decompressionOutputRefCon!).takeUnretainedValue()
+        let pts = presentationTimeStamp.value
         
-        let now = Date().timeIntervalSince1970
-        if now - decoder.lastEmittedTime >= decoder.emitInterval {
-            // print("H264Decoder: Emitting frame!")
-            decoder.lastEmittedTime = now
-            decoder.delegate?.decoder(decoder, didDecode: pixelBuffer)
-        }
+        decoder.delegate?.decoder(decoder, didDecode: pixelBuffer, pts: pts)
     }
 }
