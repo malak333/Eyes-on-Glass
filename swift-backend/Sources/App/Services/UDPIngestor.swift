@@ -29,7 +29,6 @@ public actor UDPIngestor {
         
         let newBridge = IngestorBridge(actor: self)
         self.bridge = newBridge
-        demuxer.delegate = newBridge
         decoder.delegate = newBridge
         
         let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
@@ -38,7 +37,9 @@ public actor UDPIngestor {
         self.processingTask = Task {
             for await data in stream {
                 if Task.isCancelled || !self.isActive { break }
-                self.handleData(data)
+                autoreleasepool {
+                    self.handleData(data)
+                }
             }
         }
         
@@ -99,6 +100,7 @@ public actor UDPIngestor {
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
         
         var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr.s_addr = INADDR_ANY
@@ -145,12 +147,14 @@ public actor UDPIngestor {
             var buffer = [UInt8](repeating: 0, count: 65536)
             var keepReading = true
             while keepReading {
-                let bytesRead = recv(fd, &buffer, buffer.count, 0)
-                if bytesRead > 0 {
-                    let data = Data(buffer.prefix(bytesRead))
-                    continuation?.yield(data)
-                } else {
-                    keepReading = false
+                autoreleasepool {
+                    let bytesRead = recv(fd, &buffer, buffer.count, 0)
+                    if bytesRead > 0 {
+                        let data = Data(buffer.prefix(bytesRead))
+                        continuation?.yield(data)
+                    } else {
+                        keepReading = false
+                    }
                 }
             }
         }
@@ -160,7 +164,15 @@ public actor UDPIngestor {
     
     private func handleData(_ data: Data) {
         lastPacketTime = Date().timeIntervalSince1970
-        demuxer.process(data: data)
+        let events = demuxer.process(data: data)
+        for event in events {
+            switch event {
+            case .nalUnit(let nal):
+                decoder.decode(nalUnit: nal)
+            case .discontinuity:
+                decoder.reset()
+            }
+        }
     }
     
     private func startHeartbeat(uri: String) {
@@ -188,34 +200,16 @@ public actor UDPIngestor {
     }
     
     // Internal routing for delegates since delegates are class-bound
-    fileprivate func forwardNALUnit(_ data: Data) {
-        decoder.decode(nalUnit: data)
-    }
-    fileprivate func forwardDiscontinuity() {
-        decoder.reset()
-    }
     fileprivate func forwardFrame(_ frame: CVPixelBuffer) {
         onFrameCallback?(frame)
     }
 }
 
-fileprivate class IngestorBridge: TSDemuxerDelegate, H264DecoderDelegate {
+fileprivate class IngestorBridge: H264DecoderDelegate {
     weak var actor: UDPIngestor?
     
     init(actor: UDPIngestor) {
         self.actor = actor
-    }
-    
-    func demuxer(_ demuxer: TSDemuxer, didExtractNALUnit nalUnit: Data) {
-        Task { [weak actor] in
-            await actor?.forwardNALUnit(nalUnit)
-        }
-    }
-    
-    func demuxerDidDetectDiscontinuity(_ demuxer: TSDemuxer) {
-        Task { [weak actor] in
-            await actor?.forwardDiscontinuity()
-        }
     }
     
     func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer) {

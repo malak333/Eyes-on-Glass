@@ -119,7 +119,11 @@ actor ExtractionProgress {
     private var storage: [String: ProgressData] = [:]
     
     func set(status: String, current: Int, total: Int, for filename: String) {
-        storage[filename] = ProgressData(status: status, current: current, total: total, start_time: Date().timeIntervalSince1970)
+        if let existing = storage[filename] {
+            storage[filename] = ProgressData(status: status, current: current, total: total, start_time: existing.start_time)
+        } else {
+            storage[filename] = ProgressData(status: status, current: current, total: total, start_time: Date().timeIntervalSince1970)
+        }
     }
     
     func all() -> [String: ProgressData] {

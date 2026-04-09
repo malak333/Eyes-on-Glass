@@ -1,28 +1,28 @@
 import Foundation
 
-public protocol TSDemuxerDelegate: AnyObject {
-    func demuxer(_ demuxer: TSDemuxer, didExtractNALUnit nalUnit: Data)
-    func demuxerDidDetectDiscontinuity(_ demuxer: TSDemuxer)
+public enum TSDemuxerEvent {
+    case nalUnit(Data)
+    case discontinuity
 }
 
 public class TSDemuxer {
-    public weak var delegate: TSDemuxerDelegate?
-    
     private var buffer = Data()
     private let tsPacketSize = 188
     
     // State for PES accumulation
     private var isGatheringPES = false
-    private var currentPESBuffer = Data()
+    private var videoStreamBuffer = Data()
     private var lastContinuityCounter: UInt8?
     
     // We assume PMT tells us the video PID. For simplicity, we can auto-detect the highest bandwidth stream 
     // or just assume a common PID like 0x0100 (256) or auto-lock onto the first PES stream we find.
     private var lockedVideoPID: UInt16? = nil
+    private var currentEvents: [TSDemuxerEvent] = []
     
     public init() {}
     
-    public func process(data: Data) {
+    public func process(data: Data) -> [TSDemuxerEvent] {
+        currentEvents.removeAll(keepingCapacity: true)
         buffer.append(data)
         
         // Find 0x47 sync bytes
@@ -44,6 +44,7 @@ public class TSDemuxer {
             
             parseTSPacket(tsPacket)
         }
+        return currentEvents
     }
     
     private func parseTSPacket(_ packet: Data) {
@@ -63,9 +64,9 @@ public class TSDemuxer {
                     if continuityCounter != expected && continuityCounter != last {
                         // Continuity error
                         isGatheringPES = false
-                        currentPESBuffer.removeAll()
+                        videoStreamBuffer.removeAll()
                         print("TSDemuxer: Continuity error! Expected \(expected), got \(continuityCounter)")
-                        delegate?.demuxerDidDetectDiscontinuity(self)
+                        currentEvents.append(.discontinuity)
                         // Don't log wildly, but reset
                     }
                 }
@@ -97,25 +98,17 @@ public class TSDemuxer {
                     }
                     
                     if lockedVideoPID == pid {
-                        // Finish previous PES
-                        if isGatheringPES {
-                            if currentPESBuffer.count > 0 {
-                                // print("TSDemuxer: Extracting NAL units from PES length \(currentPESBuffer.count)")
-                            }
-                            extractNALUnits(from: currentPESBuffer)
-                        }
-                        
                         // Parse PES header length
                         if payload.count > 8 {
                             let pesHeaderDataLength = Int(payload[8])
                             let pesPayloadStart = 9 + pesHeaderDataLength
                             
                             if pesPayloadStart < payload.count {
-                                currentPESBuffer = Data(payload.suffix(from: pesPayloadStart))
+                                videoStreamBuffer.append(payload.suffix(from: pesPayloadStart))
+                                extractNALUnits()
                                 isGatheringPES = true
                                 lastContinuityCounter = continuityCounter
                             } else if pesPayloadStart == payload.count {
-                                currentPESBuffer = Data()
                                 isGatheringPES = true
                                 lastContinuityCounter = continuityCounter
                             } else {
@@ -126,67 +119,76 @@ public class TSDemuxer {
                 }
             }
         } else if isGatheringPES && lockedVideoPID == pid {
-            currentPESBuffer.append(payload)
+            videoStreamBuffer.append(payload)
+            extractNALUnits()
         }
     }
     
-    private func extractNALUnits(from pesData: Data) {
-        var startOffset = 0
-        while startOffset < pesData.count - 4 {
+    private func extractNALUnits() {
+        var startOffset = videoStreamBuffer.startIndex
+        while startOffset < videoStreamBuffer.endIndex - 4 {
             // Find 0x00 0x00 0x00 0x01 or 0x00 0x00 0x01
             var nalStart = -1
             var prefixLength = 0
             
-            for i in startOffset..<(pesData.count - 3) {
-                if pesData[i] == 0 && pesData[i+1] == 0 && pesData[i+2] == 1 {
-                    nalStart = i
-                    prefixLength = 3
-                    break
-                }
-                if pesData[i] == 0 && pesData[i+1] == 0 && pesData[i+2] == 0 && pesData[i+3] == 1 {
+            for i in startOffset..<(videoStreamBuffer.endIndex - 2) {
+                if i < videoStreamBuffer.endIndex - 3, videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 0, videoStreamBuffer[i+3] == 1 {
                     nalStart = i
                     prefixLength = 4
                     break
                 }
+                if videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 1 {
+                    nalStart = i
+                    prefixLength = 3
+                    break
+                }
             }
             
-            if nalStart == -1 { break }
-            
-            // print("TSDemuxer: Found NAL start at \(nalStart) with prefix \(prefixLength)")
+            if nalStart == -1 {
+                // Keep the last 3 bytes just in case they're part of a split start code
+                let remaining = videoStreamBuffer.endIndex - startOffset
+                let keep = min(3, remaining)
+                startOffset = videoStreamBuffer.endIndex - keep
+                break
+            }
             
             // Find NEXT nal start
-            var nextNalStart = pesData.count
+            var nextNalStart = -1
             let searchStart = nalStart + prefixLength
-            if searchStart < (pesData.count - 3) {
-                for i in searchStart..<(pesData.count - 3) {
-                    if pesData[i] == 0 && pesData[i+1] == 0 && pesData[i+2] == 1 {
+            if searchStart < (videoStreamBuffer.endIndex - 2) {
+                for i in searchStart..<(videoStreamBuffer.endIndex - 2) {
+                    if i < videoStreamBuffer.endIndex - 3, videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 0, videoStreamBuffer[i+3] == 1 {
                         nextNalStart = i
-                        // check if previous is 0 to make it 0 0 0 1
-                        if i > 0 && pesData[i-1] == 0 {
-                            nextNalStart = i - 1
-                        }
+                        break
+                    }
+                    if videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 1 {
+                        nextNalStart = i
                         break
                     }
                 }
             }
             
-            let nalUnit = pesData[nalStart..<nextNalStart]
+            if nextNalStart == -1 {
+                startOffset = nalStart
+                break
+            }
             
-            // print("TSDemuxer: Extracted NAL unit length \(nalUnit.count)")
+            let nalUnit = videoStreamBuffer[nalStart..<nextNalStart]
             
-            // We pass the start codes so the decoder can reconstruct the CMBlockBuffer properly later.
-            // Some decoders want Annex B (with start codes), some want AVCC (Length delimited). 
-            // We'll pass the whole thing including start codes and let H264Decoder handle formatting.
-            delegate?.demuxer(self, didExtractNALUnit: Data(nalUnit))
+            currentEvents.append(.nalUnit(Data(nalUnit)))
             
             startOffset = nextNalStart
+        }
+        
+        if startOffset > videoStreamBuffer.startIndex {
+            videoStreamBuffer.removeSubrange(videoStreamBuffer.startIndex..<startOffset)
         }
     }
     
     public func reset() {
         buffer.removeAll()
         isGatheringPES = false
-        currentPESBuffer.removeAll()
+        videoStreamBuffer.removeAll()
         lastContinuityCounter = nil
         lockedVideoPID = nil
     }

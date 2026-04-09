@@ -11,6 +11,5 @@ cd swift-backend
 echo "[Phase 1] Building Vapor Binary for Release (Apple Silicon Optimized)..."
 swift build -c release
 
-echo "[Phase 2] Launching Backend with root privileges..."
-echo "Note: Sudo is required organically to execute 'powermetrics' for accurate GPU telemetry."
-sudo .build/release/App
+echo "[Phase 2] Launching Backend as standard user (SystemMonitor manages sudo internally)..."
+.build/release/App

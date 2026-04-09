@@ -42,15 +42,11 @@ public class H264Decoder {
         case 8: // PPS
             // print("H264Decoder: Received PPS length \(nalPayload.count)")
             pps = nalPayload
-        case 5: // IDR
+        case 5, 1: // IDR or Non-IDR slice
             if formatDesc == nil {
                 print("H264Decoder: Creating format description from SPS/PPS")
                 createFormatDescription()
             }
-            // print("H264Decoder: Decode IDR frame length \(nalPayload.count)")
-            decodeFrame(nalPayload: nalPayload)
-        case 1: // Non-IDR P/B frame
-            // print("H264Decoder: Decode non-IDR frame length \(nalPayload.count)")
             decodeFrame(nalPayload: nalPayload)
         default:
             break
@@ -165,13 +161,20 @@ public class H264Decoder {
         var sampleBuffer: CMSampleBuffer?
         var sampleSizeArray = [totalSize]
         
+        var timingInfo = CMSampleTimingInfo(
+            duration: CMTime.invalid,
+            presentationTimeStamp: CMTime(value: Int64(Date().timeIntervalSince1970 * 1000), timescale: 1000),
+            decodeTimeStamp: CMTime.invalid
+        )
+        var timingInfoArray = [timingInfo]
+        
         status = CMSampleBufferCreateReady(
             allocator: kCFAllocatorDefault,
             dataBuffer: block,
             formatDescription: formatDesc,
             sampleCount: 1,
-            sampleTimingEntryCount: 0,
-            sampleTimingArray: nil,
+            sampleTimingEntryCount: 1,
+            sampleTimingArray: &timingInfoArray,
             sampleSizeEntryCount: 1,
             sampleSizeArray: &sampleSizeArray,
             sampleBufferOut: &sampleBuffer

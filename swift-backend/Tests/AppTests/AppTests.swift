@@ -244,4 +244,11 @@ final class AppTests: XCTestCase {
             XCTAssertTrue(fetchedLog.timestampSec < 10000.0, "timestampSec should hold relative stream times, not epoch.")
         }
     }
+    
+    func testSystemMonitorAggregatedStats() async throws {
+        // Enforces rule 1: Automated testing for the SystemMonitor telemetry pipeline
+        let stats = await SystemMonitor.shared.getAggregatedStats()
+        XCTAssertNotNil(stats["1m"], "SystemMonitor should successfully initialize its statistical windows.")
+        XCTAssertNotNil(stats["30m"], "SystemMonitor should successfully initialize its 30m window.")
+    }
 }

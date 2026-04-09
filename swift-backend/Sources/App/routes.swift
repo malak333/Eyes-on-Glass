@@ -2,7 +2,7 @@ import Vapor
 
 func routes(_ app: Application) throws {
     // Serve thumbnails explicitly and securely
-    app.get("thumbnails", ":filename") { req -> Response in
+    app.get("thumbnails", ":filename") { req async throws -> Response in
         let logger = req.logger
         guard let filename = req.parameters.get("filename"),
               !filename.contains("/"),
@@ -19,7 +19,7 @@ func routes(_ app: Application) throws {
         }
         
         logger.info("Successfully served thumbnail: \(filename)")
-        return req.fileio.streamFile(at: filePath)
+        return try await req.fileio.asyncStreamFile(at: filePath)
     }
 
     try app.register(collection: VideoController())

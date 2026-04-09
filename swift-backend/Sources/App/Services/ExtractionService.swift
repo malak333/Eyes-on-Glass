@@ -391,9 +391,11 @@ struct ExtractionService: Sendable {
             .appendingPathComponent("../backend/thumbnails/")
         try? FileManager.default.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
 
+        let captureSeconds = seconds
+        let isFFmpegFallback = useFFmpegFallback
         async let freezeTask = detectFreeze(videoPath: videoURL.path)
-        async let audioTask = analyzeAudio(asset: asset, videoURL: videoURL, useFFmpegFallback: useFFmpegFallback, filename: filename, logger: logger)
-        async let framesTask = extractFrames(asset: asset, videoURL: videoURL, useFFmpegFallback: useFFmpegFallback, seconds: seconds, fps: fps, filename: filename, thumbnailsDir: thumbnailsDir, logger: logger)
+        async let audioTask = analyzeAudio(asset: asset, videoURL: videoURL, useFFmpegFallback: isFFmpegFallback, filename: filename, logger: logger)
+        async let framesTask = extractFrames(asset: asset, videoURL: videoURL, useFFmpegFallback: isFFmpegFallback, seconds: captureSeconds, fps: fps, filename: filename, thumbnailsDir: thumbnailsDir, logger: logger)
 
         let freezeIntervals = await freezeTask
         let (silenceIntervals, hasStatic, hasBuzzing, hasClicking, hasLipSync) = await audioTask

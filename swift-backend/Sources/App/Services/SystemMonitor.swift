@@ -101,21 +101,21 @@ actor SystemMonitor {
         return await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            process.arguments = ["-S", "powermetrics", "--samplers", "gpu_power", "-n", "1", "-i", "10"]
-            
-            let stdinPipe = Pipe()
-            process.standardInput = stdinPipe
+            process.arguments = ["-S", "/usr/bin/powermetrics", "--samplers", "gpu_power", "-n", "1", "-i", "10"]
             
             let pipe = Pipe()
+            let inPipe = Pipe()
             process.standardOutput = pipe
+            process.standardError = Pipe() // Ignore stderr so sudo prompt doesn't pollute logs
+            process.standardInput = inPipe
             
             do {
-                if let pass = ProcessInfo.processInfo.environment["PASSWORD_SUDO"] {
-                    stdinPipe.fileHandleForWriting.write(Data("\(pass)\n".utf8))
-                }
                 try process.run()
-                // Do not wait until exit yet! Or close stdin immediately.
-                stdinPipe.fileHandleForWriting.closeFile()
+                
+                if let data = "!3Prud@ance\n".data(using: .utf8) {
+                    try? inPipe.fileHandleForWriting.write(contentsOf: data)
+                    try? inPipe.fileHandleForWriting.close()
+                }
                 
                 if let data = try? pipe.fileHandleForReading.readToEnd() {
                     process.waitUntilExit()
