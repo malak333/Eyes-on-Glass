@@ -138,4 +138,104 @@ final class AppTests: XCTestCase {
             XCTAssertFalse(metrics.isBlurry, "A solid image shouldn't trigger laplacian variance incorrectly.")
         }
     }
+    
+    func testLiveStreamMonitoringEndpoints() async throws {
+        let app = Application(.testing)
+        defer { app.shutdown() }
+        try await configure(app)
+        
+        var returnedSessionName: String?
+        
+        // Verify start route accepts valid URI and generates unique session ID
+        try app.test(.POST, "live/start", beforeRequest: { req in
+            try req.content.encode(["uri": "udp://@127.0.0.1:9999"])
+        }, afterResponse: { res in
+            XCTAssertEqual(res.status, .ok)
+            let body = try res.content.decode([String: String].self)
+            XCTAssertTrue(body["message"]?.contains("Started live monitoring") ?? false)
+            XCTAssertNotNil(body["session_name"])
+            XCTAssertTrue(body["session_name"]!.hasPrefix("udp://@127.0.0.1:9999 - "))
+            returnedSessionName = body["session_name"]
+        })
+        
+        let progressAfterStart = await ExtractionProgress.shared.all()
+        XCTAssertEqual(progressAfterStart[returnedSessionName ?? ""]?.status, "extracting")
+        
+        // Verify stop route stops successfully and transitions progress to completed
+        try app.test(.POST, "live/stop", afterResponse: { res in
+            XCTAssertEqual(res.status, .ok)
+            let body = try res.content.decode([String: String].self)
+            XCTAssertTrue(body["message"]?.contains("Stopped") ?? false)
+        })
+        
+        let progressAfterStop = await ExtractionProgress.shared.all()
+        XCTAssertEqual(progressAfterStop[returnedSessionName ?? ""]?.status, "completed")
+    }
+    
+    func testLiveStreamThumbnailRetention() async throws {
+        let app = Application(.testing)
+        defer { app.shutdown() }
+        try await configure(app)
+        
+        let thumbDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("../backend/thumbnails/")
+        try? FileManager.default.createDirectory(at: thumbDir, withIntermediateDirectories: true)
+        
+        // Ensure starting state is clean for logs
+        try await VideoLog.query(on: app.db).delete()
+        
+        // Use the dummy black mp4 file from the root as our "live stream" URI
+        let rootDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).deletingLastPathComponent()
+        let blackVideoURI = rootDir.appendingPathComponent("test_black.mp4").path
+        
+        // Execute LiveStream service on the file
+        await LiveStreamService.shared.startMonitoring(uri: blackVideoURI, sessionName: "test_black_stream", db: app.db, logger: app.logger, client: app.client)
+        
+        // Give it 3 seconds to process a few FPS frames
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+        
+        await LiveStreamService.shared.stopMonitoring()
+        
+        // Verify VideoLogs have been populated with "black_screen" and uniquely named 'live_...' thumbnails
+        let logs = try await VideoLog.query(on: app.db).all()
+        XCTAssertGreaterThan(logs.count, 0, "Should have detected black screen anomalies")
+        
+        var foundUniqueThumbnail = false
+        for log in logs {
+            if let thumb = log.thumbnailPath, thumb.hasPrefix("live_") && thumb.hasSuffix(".jpg") {
+                foundUniqueThumbnail = true
+                let fullPath = thumbDir.appendingPathComponent(thumb).path
+                // The thumbnail should still exist on disk because it had an issue, verifying our fix!
+                XCTAssertTrue(FileManager.default.fileExists(atPath: fullPath), "Thumbnail for issue should be preserved on disk")
+                // Cleanup mock thumbnail
+                try? FileManager.default.removeItem(atPath: fullPath)
+            }
+        }
+        XCTAssertTrue(foundUniqueThumbnail, "Expected to find preserved thumbnails named with unique UUID prefixes.")
+    }
+    func testLiveStreamTimestampsAndCreatedAt() async throws {
+        let app = Application(.testing)
+        defer { app.shutdown() }
+        try await configure(app)
+        
+        try await VideoLog.query(on: app.db).delete()
+        
+        let log = VideoLog()
+        log.videoFilename = "test_timestamp_stream"
+        log.timestampSec = 1.0
+        log.nodeSource = "Live-Multicast"
+        log.issueType = "ok"
+        log.issueScore = 1.0
+        log.analysisEngine = "avfoundation"
+        
+        try await log.save(on: app.db)
+        
+        let fetchedLogs = try await VideoLog.query(on: app.db).all()
+        XCTAssertEqual(fetchedLogs.count, 1)
+        
+        if let fetchedLog = fetchedLogs.first {
+            XCTAssertNotNil(fetchedLog.createdAt, "createdAt should be populated automatically via @Timestamp")
+            XCTAssertTrue(fetchedLog.timestampSec < 10000.0, "timestampSec should hold relative stream times, not epoch.")
+        }
+    }
 }

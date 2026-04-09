@@ -5,7 +5,13 @@ import Logging
 enum Entrypoint {
     static func main() async throws {
         var env = try Environment.detect()
-        try LoggingSystem.bootstrap(from: &env)
+        try LoggingSystem.bootstrap(from: &env) { level in
+            { label in
+                var handler = StreamLogHandler.standardOutput(label: label)
+                handler.logLevel = level
+                return handler
+            }
+        }
         
         let app = try await Application.make(env)
         

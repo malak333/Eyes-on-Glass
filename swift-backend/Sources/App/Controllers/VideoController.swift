@@ -9,6 +9,35 @@ struct VideoController: RouteCollection {
         routes.get("logs", use: getLogs)
         routes.get("stats", use: getStats)
         routes.get("progress", use: getProgress)
+        
+        // Live streams
+        routes.post("live", "start", use: startLiveStream)
+        routes.post("live", "stop", use: stopLiveStream)
+    }
+
+    @Sendable
+    func startLiveStream(req: Request) async throws -> [String: String] {
+        struct Input: Content {
+            var uri: String
+        }
+        let input = try req.content.decode(Input.self)
+        
+        let dateFormatter = ISO8601DateFormatter()
+        let sessionName = "\(input.uri) - \(dateFormatter.string(from: Date()))"
+        
+        // Asynchronously start the service
+        await LiveStreamService.shared.startMonitoring(uri: input.uri, sessionName: sessionName, db: req.db, logger: req.logger, client: req.client)
+        
+        // Track progress to show active state on UI
+        await ExtractionProgress.shared.set(status: "extracting", current: 0, total: 0, for: sessionName)
+        
+        return ["session_name": sessionName, "message": "Started live monitoring for \(input.uri)."]
+    }
+
+    @Sendable
+    func stopLiveStream(req: Request) async throws -> [String: String] {
+        await LiveStreamService.shared.stopMonitoring()
+        return ["message": "Stopped live monitoring."]
     }
 
     @Sendable

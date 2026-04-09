@@ -34,7 +34,7 @@ final class VideoLog: Model, @unchecked Sendable {
     @OptionalField(key: "thumbnail_path")
     var thumbnailPath: String?
 
-    @OptionalField(key: "created_at")
+    @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
     init() { }
