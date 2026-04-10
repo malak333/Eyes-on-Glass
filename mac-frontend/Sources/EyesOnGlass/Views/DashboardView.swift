@@ -137,13 +137,51 @@ struct DashboardView: View {
                             ScrollView {
                                 LazyVStack(spacing: 8) {
                                     ForEach(logs) { log in
-                                        HStack {
+                                        HStack(spacing: 16) {
+                                            Group {
+                                                if let path = log.thumbnailPath, !path.isEmpty {
+                                                    let url = URL(fileURLWithPath: NSHomeDirectory())
+                                                        .appendingPathComponent("Documents/EyesOnGlass/thumbnails")
+                                                        .appendingPathComponent(path)
+                                                    
+                                                    AsyncImage(url: url) { phase in
+                                                        switch phase {
+                                                        case .empty:
+                                                            Rectangle()
+                                                                .fill(Color.white.opacity(0.1))
+                                                        case .success(let image):
+                                                            image
+                                                                .resizable()
+                                                                .aspectRatio(contentMode: .fill)
+                                                        case .failure:
+                                                            Rectangle()
+                                                                .fill(Color.white.opacity(0.1))
+                                                                .overlay(Image(systemName: "exclamationmark.triangle").foregroundColor(.gray))
+                                                        @unknown default:
+                                                            Rectangle()
+                                                                .fill(Color.white.opacity(0.1))
+                                                        }
+                                                    }
+                                                } else {
+                                                    Rectangle()
+                                                        .fill(Color.white.opacity(0.05))
+                                                        .overlay(
+                                                            Image(systemName: log.issueType == "ok" ? "checkmark.circle" : "waveform.path.ecg")
+                                                                .foregroundColor(log.issueType == "ok" ? .green.opacity(0.5) : .gray.opacity(0.5))
+                                                                .font(.system(size: 20))
+                                                        )
+                                                }
+                                            }
+                                            .frame(width: 72, height: 54)
+                                            .cornerRadius(6)
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                                            
                                             VStack(alignment: .leading, spacing: 4) {
                                                 Text(log.issueType.uppercased())
                                                     .font(.system(size: 14, weight: .bold, design: .monospaced))
                                                     .foregroundColor(log.issueType == "ok" ? .green : .red)
                                                 
-                                                Text("PTS: \(String(format: "%.3f", log.timestampSec)) • Engine: \(log.analysisEngine ?? "unknown")")
+                                                Text("PTS: \(String(format: "%.3f", log.timestampSec)) • Engine: \(log.analysisEngine ?? "unknown") • Time: \(log.createdAt.formatted())")
                                                     .font(.system(size: 10, design: .monospaced))
                                                     .foregroundColor(.gray)
                                             }
@@ -207,6 +245,7 @@ struct ControlPanelView: View {
     var modelContext: ModelContext
     
     @State private var streamUri: String = "udp://239.0.0.1:1234"
+    @FocusState private var isUriFocused: Bool
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -218,11 +257,17 @@ struct ControlPanelView: View {
                 TextField("udp://...", text: $streamUri)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14, design: .monospaced))
+                    .focused($isUriFocused)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(12)
             .background(Color.black.opacity(0.4))
             .cornerRadius(8)
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.1), lineWidth: 1))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                isUriFocused = true
+            }
             .disabled(streamController.connectionStatus == "Active")
             .opacity(streamController.connectionStatus == "Active" ? 0.5 : 1.0)
             

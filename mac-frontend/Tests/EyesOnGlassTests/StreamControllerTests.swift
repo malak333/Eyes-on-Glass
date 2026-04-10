@@ -50,4 +50,15 @@ final class StreamControllerTests: XCTestCase {
         XCTAssertEqual(controller.hardwareMemory, 0.0)
         XCTAssertEqual(controller.hardwareGPU, 0.0)
     }
+    
+    @MainActor
+    func testSelectedTimeframeState() async {
+        XCTAssertEqual(controller.selectedTimeframe, "1m") // Default state
+        
+        controller.selectedTimeframe = "5m"
+        XCTAssertEqual(controller.selectedTimeframe, "5m")
+        
+        controller.selectedTimeframe = "30m"
+        XCTAssertEqual(controller.selectedTimeframe, "30m")
+    }
 }
