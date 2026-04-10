@@ -19,6 +19,8 @@ final class StreamController {
     var streamDuration: TimeInterval = 0
     var streamPackets: Int = 0
     var streamBitrate: Double = 0.0
+    var streamCCErrors: Int = 0
+    var totalCCErrors: Int = 0
     var hardwareStatsHistory: [SystemMonitor.StatPoint] = []
     
     // Injected SwiftData context for the background extraction engine to utilize
@@ -62,6 +64,7 @@ final class StreamController {
                         self.streamDuration = 0
                         self.streamPackets = 0
                         self.streamBitrate = 0.0
+                        self.streamCCErrors = 0
                     }
                 }
                 
@@ -79,6 +82,7 @@ final class StreamController {
         let sessionIdentifier = "Live-\(uri)-\(Date().timeIntervalSince1970)"
         self.currentSessionIdentifier = sessionIdentifier
         self.currentSessionStartTime = Date()
+        self.streamCCErrors = 0
         
         // Dispatch to the native actor to boot the hardware session
         await LiveStreamService.shared.startMonitoring(uri: uri, sessionName: sessionIdentifier)
@@ -103,6 +107,13 @@ final class StreamController {
         self.currentSessionIdentifier = nil
         self.currentSessionStartTime = nil
     }
+    
+    @MainActor
+    func incrementCCErrors() {
+        self.streamCCErrors += 1
+        self.totalCCErrors += 1
+    }
+
     @MainActor
     func insertVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?) {
         guard let context = self.modelContext else { return }

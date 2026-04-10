@@ -28,6 +28,7 @@ public actor UDPIngestor {
     private var isStreamLost = false
     private var onVideoLostCallback: (() -> Void)?
     private var onVideoRestoredCallback: (() -> Void)?
+    private var onCCErrorCallback: (() -> Void)?
     private var isVideoLost = false
     private var lastVideoTime: TimeInterval = 0
     
@@ -37,6 +38,7 @@ public actor UDPIngestor {
         uri: String, 
         onFrame: @escaping (CVPixelBuffer, AudioHealth) -> Void, 
         onPacket: @escaping (Int) -> Void,
+        onCCError: @escaping () -> Void = {},
         onStreamLost: @escaping () -> Void = {},
         onStreamRestored: @escaping () -> Void = {},
         onVideoLost: @escaping () -> Void = {},
@@ -50,6 +52,7 @@ public actor UDPIngestor {
         self.onStreamRestoredCallback = onStreamRestored
         self.onVideoLostCallback = onVideoLost
         self.onVideoRestoredCallback = onVideoRestored
+        self.onCCErrorCallback = onCCError
         
         await streamMonitor.setOnSynced { [weak self] frame, audio in
             guard let self = self else { return }
@@ -224,6 +227,7 @@ public actor UDPIngestor {
                 audioDecoder.decode(audioPayload: audio, pts: pts)
             case .discontinuity:
                 print("UDPIngestor: Stream discontinuity detected. Allowing H264Decoder to adapt.")
+                self.onCCErrorCallback?()
                 // We intentionally DO NOT reset the H264Decoder here.
                 // VTDecompressionSession can survive minor drops, and resetting requires an IDR frame 
                 // which might not arrive for 30s, causing us to drop thousands of P-frames.

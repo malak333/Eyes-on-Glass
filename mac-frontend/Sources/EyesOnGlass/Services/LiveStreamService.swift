@@ -12,6 +12,7 @@ actor LiveStreamService {
     private var frameCount: Int = 0
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private var wasAudioHealthy: Bool? = nil
+    private var activeSessionName: String?
     
     func startMonitoring(uri: String, sessionName: String, ) async {
         if isActive {
@@ -37,6 +38,10 @@ actor LiveStreamService {
             }, onPacket: { count in
                 Task {
                     await ExtractionProgress.shared.setPackets(count, for: sessionName)
+                }
+            }, onCCError: {
+                Task {
+                    await StreamController.shared.incrementCCErrors()
                 }
             }, onStreamLost: {
                 Task {
@@ -182,15 +187,11 @@ actor LiveStreamService {
             }
             
             if !videoIssueFound && currentFrameIndex % 5 == 0 {
-                let (isSlate, conf) = await OllamaClient.analyzeFrame(imagePath: thumbURL.path, model: "moondream")
+                let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+                let (isSlate, conf) = await NativeVLMClient.shared.analyzeFrame(imagePath: thumbURL.path, tier: tier)
                 if isSlate {
-                    issuesFound.append(("slate", conf, "quick_ai"))
+                    issuesFound.append(("slate", conf, "native_vlm_\(tier.rawValue)"))
                     videoIssueFound = true
-                } else {
-                    let (fallbackSlate, fallbackConf) = await OllamaClient.analyzeFrame(imagePath: thumbURL.path, model: "llava")
-                    if fallbackSlate {
-                        issuesFound.append(("slate", fallbackConf, "heavy_ai"))
-                    }
                 }
             }
             

@@ -265,6 +265,10 @@ struct StreamStatsSectionView: View {
                 .monospacedDigit()
             LabeledContent("Bitrate", value: String(format: "%.2f Mbps", streamController.streamBitrate))
                 .monospacedDigit()
+            LabeledContent("CC Errors (Stream)", value: "\(streamController.streamCCErrors)")
+                .monospacedDigit()
+            LabeledContent("CC Errors (Total)", value: "\(streamController.totalCCErrors)")
+                .monospacedDigit()
             
             LabeledContent("Frames Analyzed", value: "\(logs.count)")
                 .monospacedDigit()
@@ -297,6 +301,7 @@ struct ConnectionSectionView: View {
     var modelContext: ModelContext
     @AppStorage("streamUri") private var streamUri: String = "udp://239.0.0.1:1234"
     @State private var localUri: String = ""
+    @State private var vlmClient = NativeVLMClient.shared
     
     var body: some View {
         Section("Connection") {
@@ -311,21 +316,71 @@ struct ConnectionSectionView: View {
                     streamUri = newValue
                 }
                 
-            Button(action: {
-                let uri = localUri
-                Task {
-                    if streamController.connectionStatus == "Active" {
-                        await streamController.stopMonitoring()
-                    } else {
-                        await streamController.startMonitoring(uri: uri, context: modelContext)
+            Picker("AI Model", selection: Binding(
+                get: { vlmClient.selectedTier },
+                set: { tier in
+                    Task {
+                        await vlmClient.prepareModel(tier: tier)
                     }
                 }
-            }) {
-                Text(streamController.connectionStatus == "Active" ? "Disconnect" : "Initialize Stream")
-                    .frame(maxWidth: .infinity)
+            )) {
+                ForEach(GemmaModelTier.allCases) { tier in
+                    Text(tier.displayName).tag(tier)
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(streamController.connectionStatus == "Active" ? .red : .blue)
+            .disabled(streamController.connectionStatus == "Active")
+            
+            switch vlmClient.state {
+            case .notLoaded:
+                Button(action: {
+                    let tier = vlmClient.selectedTier
+                    Task { await vlmClient.prepareModel(tier: tier) }
+                }) {
+                    Text("Download & Prepare Model")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+            case .downloading(let progress):
+                ProgressView(value: progress) {
+                    Text("Downloading Model... \(Int(progress * 100))%")
+                        .font(.caption)
+                }
+            case .loadingToMemory:
+                ProgressView() {
+                    Text("Loading to Unified Memory...")
+                        .font(.caption)
+                }
+            case .error(let msg):
+                Text(msg)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+                Button(action: {
+                    let tier = vlmClient.selectedTier
+                    Task { await vlmClient.prepareModel(tier: tier) }
+                }) {
+                    Text("Retry Prepare Model")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            case .ready:
+                Button(action: {
+                    let uri = localUri
+                    Task {
+                        if streamController.connectionStatus == "Active" {
+                            await streamController.stopMonitoring()
+                        } else {
+                            await streamController.startMonitoring(uri: uri, context: modelContext)
+                        }
+                    }
+                }) {
+                    Text(streamController.connectionStatus == "Active" ? "Disconnect" : "Initialize Stream")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(streamController.connectionStatus == "Active" ? .red : .blue)
+            }
         }
     }
 }

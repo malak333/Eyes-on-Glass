@@ -494,15 +494,11 @@ struct ExtractionService: Sendable {
                     }
                     
                     if !videoIssueFound && i % 5 == 0 {
-                        let (isSlate, conf) = await OllamaClient.analyzeFrame(imagePath: thumbPath, model: "moondream")
+                        let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+                        let (isSlate, conf) = await NativeVLMClient.shared.analyzeFrame(imagePath: thumbPath, tier: tier)
                         if isSlate {
-                            issuesFound.append(("slate", conf, "quick_ai"))
+                            issuesFound.append(("slate", conf, "native_vlm_\(tier.rawValue)"))
                             videoIssueFound = true
-                        } else {
-                            let (fallbackSlate, fallbackConf) = await OllamaClient.analyzeFrame(imagePath: thumbPath, model: "llava")
-                            if fallbackSlate {
-                                issuesFound.append(("slate", fallbackConf, "heavy_ai"))
-                            }
                         }
                     }
                     
