@@ -15,6 +15,9 @@ final class VideoLog {
     var analysisEngine: String?
     var thumbnailPath: String?
     var createdAt: Date
+    var isArchived: Bool = false
+    var sessionIdentifier: String?
+    var sessionStartTime: Date?
 
     init(videoFilename: String = "",
          timestampSec: Double = 0.0,
@@ -25,7 +28,10 @@ final class VideoLog {
          issueScore: Double? = nil,
          analysisEngine: String? = nil,
          thumbnailPath: String? = nil,
-         createdAt: Date = Date()) {
+         createdAt: Date = Date(),
+         isArchived: Bool = false,
+         sessionIdentifier: String? = nil,
+         sessionStartTime: Date? = nil) {
         self.videoFilename = videoFilename
         self.timestampSec = timestampSec
         self.nodeSource = nodeSource
@@ -36,5 +42,8 @@ final class VideoLog {
         self.analysisEngine = analysisEngine
         self.thumbnailPath = thumbnailPath
         self.createdAt = createdAt
+        self.isArchived = isArchived
+        self.sessionIdentifier = sessionIdentifier
+        self.sessionStartTime = sessionStartTime
     }
 }

@@ -1,299 +1,367 @@
 import SwiftData
 import SwiftUI
+import Charts
 
 struct DashboardView: View {
     @Environment(StreamController.self) private var streamController
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \VideoLog.timestampSec, order: .reverse) private var logs: [VideoLog]
-        
+    @Query(filter: #Predicate<VideoLog> { $0.isArchived == false }, sort: \VideoLog.timestampSec, order: .reverse) private var logs: [VideoLog]
+    @State private var selectedLog: VideoLog?
         
     var body: some View {
-        VStack(spacing: 0) {
-            // Top Header Bar
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("EYES ON GLASS")
-                        .font(.system(size: 24, weight: .black, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(colors: [.white, .white.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        )
-                        .tracking(2)
-                    
-                    Text("TELEMETRY PROCESSING PIPELINE")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundColor(.gray)
-                }
-                
-                Spacer()
-                
-                // Status Indicator
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(streamController.connectionStatus == "Active" ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
-                        .shadow(color: streamController.connectionStatus == "Active" ? .green : .red, radius: 4)
-                    
-                    Text(streamController.connectionStatus.uppercased())
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(streamController.connectionStatus == "Active" ? .green : .red)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.black.opacity(0.3))
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
-            }
-            .padding(24)
-            .background(.ultraThinMaterial)
-            .overlay(Rectangle().frame(height: 1).foregroundColor(.white.opacity(0.1)), alignment: .bottom)
-            
-            // Main Content Area
-            HStack(spacing: 24) {
-                // Left Column - Controls & Stats
-                VStack(spacing: 24) {
-                    // Control Panel
-                    ControlPanelView(streamController: streamController, modelContext: modelContext)
-                    
-                    // Hardware Metrics
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack {
-                            Text("HARDWARE ACQUISITION")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundColor(.gray)
-                            
-                            Spacer()
-                            
-                            Menu {
-                                ForEach(["1m", "5m", "10m", "20m", "30m"], id: \.self) { timeframe in
-                                    Button(action: {
-                                        streamController.selectedTimeframe = timeframe
-                                    }) {
-                                        Text(timeframe)
-                                        if streamController.selectedTimeframe == timeframe {
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
-                                }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(streamController.selectedTimeframe)
-                                        .font(.system(size: 11, design: .monospaced))
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 9))
-                                }
-                                .foregroundColor(.gray)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.white.opacity(0.1))
-                                .cornerRadius(4)
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
+        NavigationSplitView {
+            DashboardSidebar(streamController: streamController, modelContext: modelContext, logs: logs)
+        } detail: {
+            Group {
+                if logs.isEmpty {
+                    if streamController.connectionStatus == "Active" {
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            Text("Awaiting NAL Units...")
+                                .font(.headline)
+                                .foregroundColor(.secondary)
                         }
-                        
-                        MetricRow(label: "CPU USAGE", value: String(format: "%.1f%%", streamController.hardwareCPU))
-                        MetricRow(label: "MEMORY (RES)", value: String(format: "%.0f MB", streamController.hardwareMemory))
-                        MetricRow(label: "GPU USAGE", value: String(format: "%.1f%%", streamController.hardwareGPU))
+                    } else {
+                        ContentUnavailableView("No Signal", systemImage: "antenna.radiowaves.left.and.right", description: Text("Initialize stream to begin monitoring."))
                     }
-                    .padding(20)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(16)
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
-                    
-                    Spacer()
-                }
-                .frame(width: 320)
-                
-                // Right Column - Active Telemetry
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("PIPELINE OBSERVABILITY (\(logs.count) EVENTS)")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(.gray)
-                    
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(Color.black.opacity(0.4))
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
-                        
-                        if logs.isEmpty {
-                            if streamController.connectionStatus == "Active" {
-                                VStack(spacing: 8) {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                        .tint(.blue)
-                                        .scaleEffect(1.5)
-                                        .padding(.bottom, 16)
-                                    
-                                    Text("AWAITING NAL UNITS...")
-                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                        .foregroundColor(.gray)
-                                }
-                            } else {
-                                Text("NO SIGNAL")
-                                    .font(.system(size: 24, weight: .bold, design: .monospaced))
-                                    .foregroundColor(Color.white.opacity(0.2))
-                            }
-                        } else {
-                            ScrollView {
-                                LazyVStack(spacing: 8) {
-                                    ForEach(logs) { log in
-                                        HStack(spacing: 16) {
-                                            Group {
-                                                if let path = log.thumbnailPath, !path.isEmpty {
-                                                    let url = URL(fileURLWithPath: NSHomeDirectory())
-                                                        .appendingPathComponent("Documents/EyesOnGlass/thumbnails")
-                                                        .appendingPathComponent(path)
-                                                    
-                                                    AsyncImage(url: url) { phase in
-                                                        switch phase {
-                                                        case .empty:
-                                                            Rectangle()
-                                                                .fill(Color.white.opacity(0.1))
-                                                        case .success(let image):
-                                                            image
-                                                                .resizable()
-                                                                .aspectRatio(contentMode: .fill)
-                                                        case .failure:
-                                                            Rectangle()
-                                                                .fill(Color.white.opacity(0.1))
-                                                                .overlay(Image(systemName: "exclamationmark.triangle").foregroundColor(.gray))
-                                                        @unknown default:
-                                                            Rectangle()
-                                                                .fill(Color.white.opacity(0.1))
-                                                        }
-                                                    }
-                                                } else {
-                                                    Rectangle()
-                                                        .fill(Color.white.opacity(0.05))
-                                                        .overlay(
-                                                            Image(systemName: log.issueType == "ok" ? "checkmark.circle" : "waveform.path.ecg")
-                                                                .foregroundColor(log.issueType == "ok" ? .green.opacity(0.5) : .gray.opacity(0.5))
-                                                                .font(.system(size: 20))
-                                                        )
-                                                }
-                                            }
-                                            .frame(width: 72, height: 54)
-                                            .cornerRadius(6)
-                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.1), lineWidth: 1))
-                                            
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(log.issueType.uppercased())
-                                                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                                    .foregroundColor(log.issueType == "ok" ? .green : .red)
-                                                
-                                                Text("PTS: \(String(format: "%.3f", log.timestampSec)) • Engine: \(log.analysisEngine ?? "unknown") • Time: \(log.createdAt.formatted())")
-                                                    .font(.system(size: 10, design: .monospaced))
-                                                    .foregroundColor(.gray)
-                                            }
-                                            
-                                            Spacer()
-                                            
-                                            if let score = log.issueScore {
-                                                Text(String(format: "CONF: %.2f", score))
-                                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                                    .foregroundColor(.white)
-                                                    .padding(.horizontal, 8)
-                                                    .padding(.vertical, 4)
-                                                    .background(Color.white.opacity(0.1))
-                                                    .cornerRadius(4)
-                                            }
-                                        }
-                                        .padding(16)
-                                        .background(Color.white.opacity(0.05))
-                                        .cornerRadius(8)
-                                    }
-                                }
-                                .padding(16)
-                            }
+                } else {
+                    List(selection: $selectedLog) {
+                        ForEach(logs) { log in
+                            LogEventRow(log: log)
+                                .tag(log)
                         }
+                    }
+                    .listStyle(.inset)
+                }
+            }
+            .navigationTitle("Eyes on Glass")
+            .toolbar {
+                ToolbarItem(placement: .status) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(streamController.connectionStatus == "Active" ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+                        Text(streamController.connectionStatus)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
-            .padding(24)
         }
-        .background(
-            Color.black
-                .overlay(
-                    LinearGradient(colors: [Color.blue.opacity(0.1), Color.black], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
-        )
-        .preferredColorScheme(.dark)
+        .sheet(item: $selectedLog) { log in
+            EventDetailView(log: log)
+        }
     }
 }
 
-// Helper Component for Metrics
-struct MetricRow: View {
-    let label: String
-    let value: String
+struct LogEventRow: View {
+    let log: VideoLog
     
     var body: some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.gray)
+        HStack(spacing: 16) {
+            Group {
+                if let path = log.thumbnailPath, !path.isEmpty {
+                    let url = URL(fileURLWithPath: NSHomeDirectory())
+                        .appendingPathComponent("Documents/EyesOnGlass/thumbnails")
+                        .appendingPathComponent(path)
+                    
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            Rectangle()
+                                .fill(Color(NSColor.windowBackgroundColor))
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        case .failure:
+                            Rectangle()
+                                .fill(Color(NSColor.windowBackgroundColor))
+                                .overlay(Image(systemName: "exclamationmark.triangle").foregroundColor(.secondary))
+                        @unknown default:
+                            Rectangle()
+                                .fill(Color(NSColor.windowBackgroundColor))
+                        }
+                    }
+                } else {
+                    Rectangle()
+                        .fill(Color(NSColor.windowBackgroundColor))
+                        .overlay(
+                            Image(systemName: log.issueType == "ok" ? "checkmark.circle" : "waveform.path.ecg")
+                                .foregroundColor(log.issueType == "ok" ? .green : .secondary)
+                                .font(.title2)
+                        )
+                }
+            }
+            .frame(width: 72, height: 54)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2), lineWidth: 1))
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(log.issueType.uppercased())
+                    .font(.headline)
+                    .foregroundColor(log.issueType == "ok" ? .green : .red)
+                
+                Text(String(format: "PTS: %.3f • Engine: %@", log.timestampSec, log.analysisEngine ?? "unknown"))
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    
+                Text("Time: \(log.createdAt.formatted())")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
             Spacer()
-            Text(value)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(.white)
+            
+            if let score = log.issueScore {
+                Text(String(format: "Conf: %.2f", score))
+                    .font(.subheadline.monospacedDigit())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .cornerRadius(4)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct EventDetailView: View {
+    let log: VideoLog
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let path = log.thumbnailPath, !path.isEmpty {
+                    let url = URL(fileURLWithPath: NSHomeDirectory())
+                        .appendingPathComponent("Documents/EyesOnGlass/thumbnails")
+                        .appendingPathComponent(path)
+                    
+                    Section {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .empty:
+                                ProgressView()
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(40)
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxHeight: 400)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            case .failure:
+                                ContentUnavailableView("Image Load Failed", systemImage: "xmark.rectangle")
+                            @unknown default:
+                                EmptyView()
+                            }
+                        }
+                    }
+                }
+                
+                Section("Event Metadata") {
+                    LabeledContent("Issue Type", value: log.issueType.uppercased())
+                    if let score = log.issueScore {
+                        LabeledContent("Confidence") {
+                            Text(String(format: "%.2f", score)).monospacedDigit()
+                        }
+                    }
+                    LabeledContent("PTS") {
+                        Text(String(format: "%.3f", log.timestampSec)).monospacedDigit()
+                    }
+                    if let engine = log.analysisEngine {
+                        LabeledContent("Engine", value: engine)
+                    }
+                    LabeledContent("Time", value: log.createdAt.formatted())
+                }
+                
+                Section("System Path") {
+                    if !log.videoFilename.isEmpty {
+                        LabeledContent("Filename", value: log.videoFilename)
+                    }
+                    if let nodeSource = log.nodeSource {
+                        LabeledContent("Node Source", value: nodeSource)
+                    }
+                    if let nodeBackbone = log.nodeBackbone {
+                        LabeledContent("Node Backbone", value: nodeBackbone)
+                    }
+                    if let nodeDest = log.nodeDest {
+                        LabeledContent("Node Dest", value: nodeDest)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Event Details")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .frame(minWidth: 400, minHeight: 500)
         }
     }
 }
 
-// Subview for Control Panel to isolate view re-evaluation
-struct ControlPanelView: View {
+struct DashboardSidebar: View {
     var streamController: StreamController
     var modelContext: ModelContext
-    
-    @State private var streamUri: String = "udp://239.0.0.1:1234"
-    @FocusState private var isUriFocused: Bool
+    var logs: [VideoLog]
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("CONNECTION URI")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(.gray)
+        List {
+            ConnectionSectionView(streamController: streamController, modelContext: modelContext)
             
-            HStack {
-                TextField("udp://...", text: $streamUri)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14, design: .monospaced))
-                    .focused($isUriFocused)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if streamController.connectionStatus == "Active" {
+                StreamStatsSectionView(streamController: streamController, logs: logs)
             }
-            .padding(12)
-            .background(Color.black.opacity(0.4))
-            .cornerRadius(8)
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.1), lineWidth: 1))
-            .contentShape(Rectangle())
-            .onTapGesture {
-                isUriFocused = true
-            }
-            .disabled(streamController.connectionStatus == "Active")
-            .opacity(streamController.connectionStatus == "Active" ? 0.5 : 1.0)
             
+            HardwareSectionView(streamController: streamController)
+        }
+        .navigationTitle("Telemetry Controls")
+        .listStyle(.sidebar)
+    }
+}
+
+struct StreamStatsSectionView: View {
+    @Bindable var streamController: StreamController
+    var logs: [VideoLog]
+    
+    var body: some View {
+        Section("Stream Statistics") {
+            LabeledContent("Duration", value: formatDuration(streamController.streamDuration))
+                .monospacedDigit()
+            LabeledContent("Packets Rx", value: "\(streamController.streamPackets)")
+                .monospacedDigit()
+            LabeledContent("Bitrate", value: String(format: "%.2f Mbps", streamController.streamBitrate))
+                .monospacedDigit()
+            
+            LabeledContent("Frames Analyzed", value: "\(logs.count)")
+                .monospacedDigit()
+            
+            let issuesCount = logs.filter { $0.issueType != "ok" }.count
+            LabeledContent("Issues Extracted", value: "\(issuesCount)")
+                .monospacedDigit()
+            
+            let score = logs.isEmpty ? 100.0 : ((Double(logs.count - issuesCount) / Double(logs.count)) * 100.0)
+            LabeledContent("Health Score") {
+                Text(String(format: "%.1f%%", score))
+                    .foregroundColor(score > 90 ? .green : (score > 70 ? .orange : .red))
+                    .bold()
+                    .monospacedDigit()
+            }
+        }
+    }
+    
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute, .second]
+        formatter.unitsStyle = .positional
+        formatter.zeroFormattingBehavior = .pad
+        return formatter.string(from: duration) ?? "00:00:00"
+    }
+}
+
+struct ConnectionSectionView: View {
+    @Bindable var streamController: StreamController
+    var modelContext: ModelContext
+    @AppStorage("streamUri") private var streamUri: String = "udp://239.0.0.1:1234"
+    @State private var localUri: String = ""
+    
+    var body: some View {
+        Section("Connection") {
+            TextField("URI", text: $localUri)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .disabled(streamController.connectionStatus == "Active")
+                .onAppear {
+                    localUri = streamUri
+                }
+                .onChange(of: localUri) { oldValue, newValue in
+                    streamUri = newValue
+                }
+                
             Button(action: {
+                let uri = localUri
                 Task {
                     if streamController.connectionStatus == "Active" {
                         await streamController.stopMonitoring()
                     } else {
-                        await streamController.startMonitoring(uri: streamUri, context: modelContext)
+                        await streamController.startMonitoring(uri: uri, context: modelContext)
                     }
                 }
             }) {
-                Text(streamController.connectionStatus == "Active" ? "DISCONNECT" : "INITIALIZE STREAM")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                Text(streamController.connectionStatus == "Active" ? "Disconnect" : "Initialize Stream")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(streamController.connectionStatus == "Active" ? Color.red.opacity(0.2) : Color.blue.opacity(0.2))
-                    .foregroundColor(streamController.connectionStatus == "Active" ? .red : .blue)
-                    .cornerRadius(8)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(streamController.connectionStatus == "Active" ? Color.red.opacity(0.5) : Color.blue.opacity(0.5), lineWidth: 1))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderedProminent)
+            .tint(streamController.connectionStatus == "Active" ? .red : .blue)
         }
-        .padding(20)
-        .background(.ultraThinMaterial)
-        .cornerRadius(16)
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1), lineWidth: 1))
+    }
+}
+
+struct HardwareSectionView: View {
+    @Bindable var streamController: StreamController
+    @AppStorage("showHardwareGraphs") private var showHardwareGraphs: Bool = false
+    
+    var body: some View {
+        Section("Hardware Acquisition") {
+            Picker("Timeframe", selection: $streamController.selectedTimeframe) {
+                ForEach(["1m", "5m", "10m", "20m", "30m"], id: \.self) { timeframe in
+                    Text(timeframe).tag(timeframe)
+                }
+            }
+            
+            Toggle("Show Graphs", isOn: $showHardwareGraphs)
+            
+            LabeledContent("CPU Usage") {
+                Text(String(format: "%.1f%%", streamController.hardwareCPU))
+                    .monospacedDigit()
+            }
+            if showHardwareGraphs && !streamController.hardwareStatsHistory.isEmpty {
+                Chart(streamController.hardwareStatsHistory, id: \.timestamp) { item in
+                    LineMark(
+                        x: .value("Time", Date(timeIntervalSince1970: TimeInterval(item.timestamp))),
+                        y: .value("CPU", item.cpu)
+                    )
+                    .foregroundStyle(.blue)
+                }
+                .frame(height: 80)
+                .padding(.bottom, 8)
+            }
+            
+            LabeledContent("Memory (RES)") {
+                Text(String(format: "%.0f MB", streamController.hardwareMemory))
+                    .monospacedDigit()
+            }
+            if showHardwareGraphs && !streamController.hardwareStatsHistory.isEmpty {
+                Chart(streamController.hardwareStatsHistory, id: \.timestamp) { item in
+                    LineMark(
+                        x: .value("Time", Date(timeIntervalSince1970: TimeInterval(item.timestamp))),
+                        y: .value("Memory", item.memory)
+                    )
+                    .foregroundStyle(.purple)
+                }
+                .frame(height: 80)
+                .padding(.bottom, 8)
+            }
+            
+            LabeledContent("GPU Usage") {
+                Text(String(format: "%.1f%%", streamController.hardwareGPU))
+                    .monospacedDigit()
+            }
+            if showHardwareGraphs && !streamController.hardwareStatsHistory.isEmpty {
+                Chart(streamController.hardwareStatsHistory, id: \.timestamp) { item in
+                    LineMark(
+                        x: .value("Time", Date(timeIntervalSince1970: TimeInterval(item.timestamp))),
+                        y: .value("GPU", item.gpu)
+                    )
+                    .foregroundStyle(.green)
+                }
+                .frame(height: 80)
+                .padding(.bottom, 8)
+            }
+        }
     }
 }

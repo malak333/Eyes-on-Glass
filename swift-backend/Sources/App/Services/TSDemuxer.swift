@@ -45,7 +45,7 @@ public class TSDemuxer {
                 }
             }
             
-            let tsPacket = Data(buffer.prefix(tsPacketSize))
+            let tsPacket = Data([UInt8](buffer.prefix(tsPacketSize)))
             buffer.removeFirst(tsPacketSize)
             
             parseTSPacket(tsPacket)
@@ -230,8 +230,9 @@ public class TSDemuxer {
             
             var nextNalStart = -1
             let searchStart = nalStart + prefixLength
-            if searchStart < (videoStreamBuffer.endIndex - 2) {
-                for i in searchStart..<(videoStreamBuffer.endIndex - 2) {
+            let optimizedSearchStart = max(searchStart, boundary - 4)
+            if optimizedSearchStart < (videoStreamBuffer.endIndex - 2) {
+                for i in optimizedSearchStart..<(videoStreamBuffer.endIndex - 2) {
                     if i < videoStreamBuffer.endIndex - 3, videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 0, videoStreamBuffer[i+3] == 1 {
                         nextNalStart = i
                         break

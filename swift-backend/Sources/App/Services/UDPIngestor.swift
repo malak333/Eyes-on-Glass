@@ -79,18 +79,27 @@ public actor UDPIngestor {
     }
     
     private func parseURI(_ uri: String) -> (Bool, String, UInt16)? {
-        let isMulticast = uri.contains("@")
+        let hasAt = uri.contains("@")
         var cleanURI = uri.replacingOccurrences(of: "udp://", with: "")
         cleanURI = cleanURI.replacingOccurrences(of: "@", with: "")
+        
+        let isMulticastHost: (String) -> Bool = { host in
+            let parts = host.split(separator: ".")
+            if let first = Int(parts.first ?? ""), first >= 224 && first <= 239 {
+                return true
+            }
+            return false
+        }
         
         guard let url = URL(string: "rtsp://" + cleanURI), let host = url.host, let port = url.port else {
             let parts = cleanURI.split(separator: ":")
             if parts.count == 2, let p = UInt16(parts[1]) {
-                return (isMulticast, String(parts[0]), p)
+                let h = String(parts[0])
+                return (hasAt || isMulticastHost(h), h, p)
             }
             return nil
         }
-        return (isMulticast, host, UInt16(port))
+        return (hasAt || isMulticastHost(host), host, UInt16(port))
     }
     
     private func connect(uri: String) async {

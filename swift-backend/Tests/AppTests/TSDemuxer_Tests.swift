@@ -6,8 +6,8 @@ final class TSDemuxer_Tests: XCTestCase {
     func testTSDemuxerSyncByteAlignment() throws {
         let demuxer = TSDemuxer()
         
-        // Create 200 bytes of garbage
-        var garbageData = Data(repeating: 0xFF, count: 200)
+        // Create 300 bytes of garbage
+        var garbageData = Data(repeating: 0xFF, count: 300)
         
         // Inject a mocked MPEG-TS packet at offset 50
         // standard TS packet is 188 bytes, starts with 0x47
@@ -88,7 +88,7 @@ final class TSDemuxer_Tests: XCTestCase {
         
         let events1 = demuxer.process(data: secondPacket)
         let nals1 = events1.compactMap { event -> Data? in
-            if case .nalUnit(let data, _) = event { return data }
+            if case .nalUnit(let data, _, _) = event { return data }
             return nil
         }
         
@@ -115,7 +115,7 @@ final class TSDemuxer_Tests: XCTestCase {
         
         let events2 = demuxer.process(data: thirdPacket)
         let nals2 = events2.compactMap { event -> Data? in
-            if case .nalUnit(let data, _) = event { return data }
+            if case .nalUnit(let data, _, _) = event { return data }
             return nil
         }
         
@@ -178,7 +178,7 @@ final class TSDemuxer_Tests: XCTestCase {
         
         var emittedNalUnits: [Data] = []
         for event in (events1 + events2) {
-            if case .nalUnit(let nal, _) = event {
+            if case .nalUnit(let nal, _, _) = event {
                 emittedNalUnits.append(nal)
             }
         }
@@ -186,9 +186,9 @@ final class TSDemuxer_Tests: XCTestCase {
         XCTAssertEqual(emittedNalUnits.count, 3)
         // Verify start codes are correctly bounded natively for second and third chunks
         if emittedNalUnits.count >= 3 {
-             XCTAssertEqual(emittedNalUnits[0][4], 0x11)
-             XCTAssertEqual(emittedNalUnits[1][4], 0x22)
-             XCTAssertEqual(emittedNalUnits[2][4], 0x33)
+             XCTAssertEqual([UInt8](emittedNalUnits[0])[4], 0x11)
+             XCTAssertEqual([UInt8](emittedNalUnits[1])[4], 0x22)
+             XCTAssertEqual([UInt8](emittedNalUnits[2])[4], 0x33)
         }
     }
     
@@ -238,13 +238,14 @@ final class TSDemuxer_Tests: XCTestCase {
             }
         }
         
-        // Should find exactly 1 audio frame representing the first packet's payload
-        XCTAssertEqual(emittedAudioFrames.count, 1)
+        // Should find 2 audio frames since both packets had PES payloads
+        XCTAssertEqual(emittedAudioFrames.count, 2)
         if let firstAudio = emittedAudioFrames.first {
-            XCTAssertGreaterThanOrEqual(firstAudio.count, 3)
-            XCTAssertEqual(firstAudio[0], 0x01)
-            XCTAssertEqual(firstAudio[1], 0x02)
-            XCTAssertEqual(firstAudio[2], 0x03)
+            let firstAudioArray = [UInt8](firstAudio)
+            XCTAssertGreaterThanOrEqual(firstAudioArray.count, 3)
+            XCTAssertEqual(firstAudioArray[0], 0x01)
+            XCTAssertEqual(firstAudioArray[1], 0x02)
+            XCTAssertEqual(firstAudioArray[2], 0x03)
         }
     }
 }

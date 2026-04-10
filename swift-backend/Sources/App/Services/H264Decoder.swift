@@ -255,7 +255,19 @@ public class H264Decoder {
         
         var sampleBuffer: CMSampleBuffer?
         var sampleSizeArray = [totalSize]
-        let actualDTS = currentFrameDTS ?? currentFramePTS
+        
+        let actualDTS: Int64
+        if let dts = currentFrameDTS {
+            actualDTS = dts
+            monotonicDTS = dts + 1
+        } else {
+            if monotonicDTS == 0 || monotonicDTS >= currentFramePTS {
+                monotonicDTS = currentFramePTS - 90000
+            }
+            actualDTS = monotonicDTS
+            monotonicDTS += 3000
+        }
+        
         let decodeTime = CMTime(value: actualDTS, timescale: 90000)
         let timingInfo = CMSampleTimingInfo(duration: CMTime.invalid, presentationTimeStamp: CMTime(value: currentFramePTS, timescale: 90000), decodeTimeStamp: decodeTime)
         var timingInfoArray = [timingInfo]
@@ -281,9 +293,9 @@ public class H264Decoder {
             frameRefcon: nil, infoFlagsOut: &flagsOut
         )
         if isCurrentFrameSync {
-            print("H264Decoder: Submitted IDR frame to VT (PTS: \(currentFramePTS))")
+            print("H264Decoder: Submitted IDR frame to VT (PTS: \(currentFramePTS), DTS: \(actualDTS))")
         } else {
-            print("H264Decoder: Submitted P/B frame to VT (PTS: \(currentFramePTS))")
+            print("H264Decoder: Submitted P/B frame to VT (PTS: \(currentFramePTS), DTS: \(actualDTS))")
         }
         
         if decodeStatus != noErr {

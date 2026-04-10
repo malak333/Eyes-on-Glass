@@ -1,96 +1,92 @@
 # Eyes on Glass
 
-**Eyes on Glass** is an AI-powered concept application that monitors video streams (e.g., `.ts`, `.mp4`) for visual/audio anomalies like lip-sync issues, macroblocking, pure black screens, slates, top artifacts (e.g., tearing, VANC data bleed), and audio corruptions (like audio dropouts, severe buzzing, or sporadic clicking audio). Instead of monitoring the stream at a full 60 FPS, this application extracts an optimized subset of frames (1 FPS) for analysis, drastically improving performance while retaining fidelity, designed explicitly to run on local hardware (e.g., M1 Pro with 32GB of RAM).
+**Eyes on Glass** is an AI-powered concept application that monitors video streams (e.g., `.ts`, `.mp4`) for visual/audio anomalies like lip-sync issues, macroblocking, pure black screens, slates, top artifacts, and audio corruptions (like dropouts, severe buzzing, or sporadic clicking). Instead of monitoring the stream at 60 FPS, this application natively extracts an optimized subset of frames (1 FPS) for analysis, drastically improving performance while retaining fidelity. 
+
+The entire system is a **standalone, native macOS desktop application** specifically built for Apple Silicon (M-series with 32GB RAM).
 
 ---
 
 ## 🏗 Architecture
 
-The platform architecture is highly localized and split into a React Frontend and Python Backend:
+The platform architecture is unified into a single SwiftUI macOS Application Package (`mac-frontend/`):
 
-1. **Frontend (`frontend/`)**: 
-   - A Vite + React web application properly unit-tested via **Vitest**.
-   - Designed with an ultra-premium aesthetic utilizing raw CSS glassmorphic overlays.
-   - Monitors timeline intelligence, live stream health scores, and dynamic internal hardware consumption (CPU, Memory, GPU) separated into dedicated visual charts.
-   - Features a real-time system polling indicator that actively monitors if the local Ollama daemon is properly running.
-   - Features dynamic tabbed navigation to seamlessly switch between the currently analyzed "Active Stream" and previously generated "Old Analysis" history logs.
-   - Displays a live, asynchronous **Progress Tracking Bar** during video uploads so you can monitor extraction and processing status.
-   - Includes a dynamic **Analysis Breakdown** summary detailing every specific anomaly detected (e.g., Macroblocking, Lip Sync, Audio Dropouts) broken down by total frame count.
-2. **Backend (`swift-backend/`)**:
-   - A high-performance **Swift Vapor** service running natively on Apple Silicon.
-   - Receives video streams asynchronously natively bypassing the former Python GIL bottlenecks.
-   - Delegates local processing to **AVFoundation/AVAssetReader**, carving out frames directly into memory, dramatically outscaling sub-process FFmpeg extraction speeds. If a broadcast transport stream contains malformed headers (e.g., missing PPS/SPS configurations) that crash hardware decoders, a robust extraction subsystem seamlessly falls back to a sub-process **FFmpeg Decoder Engine** automatically retrieving frames for structural fidelity.
-   - Feeds extracted frames concurrently using Swift's `async let` and `TaskGroup` primitives (scaled dynamically to `activeProcessorCount * 2`) into a **Native Validation Pipeline**. Math matrix routines executed natively via `vImage` and `Accelerate` check for standard deviation and laplacian threshold differences replacing heavyweight OpenCV libraries. The native Core Audio loop scans for decibel peaking, muting, and zero-cross clipping on RAW buffers.
-   - **Analysis Engine Tracking**: Every detected issue is securely tagged directly to the specific execution engine (`avfoundation`, `coreimage`, `ffmpeg`, `quick_ai`, or `heavy_ai`) to grant engineers precise debugging observability.
-   - Only beautifully clean frames fall through to the **AI Analyzers**, which dynamically orchestrate a tiered approach using **Ollama Vision Language Models**: checking the lightweight **Moondream** model first for high-speed anomalous slate detection before defaulting to the heavier **LLaVA** model as a final assurance check.
-   - Implements an asynchronous system polling task using macOS `mach_task` primitives alongside `powermetrics` natively within Swift to stream live operational hardware telemetry back to the dashboard.
-   - **Live Multicast Integration (`LiveStreamService`)**: A dedicated concurrent actor natively ingests infinite UDP streams using low-level **BSD Sockets**. Processing leverages a multi-track parsing engine (`TSDemuxer`) extracting and locking onto both Audio (`0xC0-0xDF`, `0xBD`) and Video (`0xE0-0xEF`) payloads simultaneously along with their exact 33-bit Presentation Time Stamps (PTS). The Video track executes zero-copy hardware decoding via Apple Silicon's native VideoToolbox (`H264Decoder`). This bypasses standard FFmpeg failures by implementing rigid **multi-slice AVCC encapsulation**, **dynamic SPS/PPS tracking**, and strict **hasSlice** validation. This enables the hardware session to dynamically recover from inline ad-splicing parameter changes and dropped over-the-air packets without crashing from `-12909` or `-8969` synchronization failures. A native `StreamMonitor` Actor aggressively aligns these discrete tracking channels using **Decoupled Time-Window Buffers**. It executes a strict **1-FPS Governor** (clamping egress exclusively by exactly 90,000 PTS ticks) to prevent overloading the downstream AI pipeline. It exclusively authorizes analysis execution only when a valid temporal synchronization window occurs (default 250ms tolerance) and strictly prunes any desynced streams with a 500ms staleness threshold, actively preventing task ballooning, GPU spikes, and linear memory leaks without falling back to heavy wrappers like `FFmpeg`. Ingest progress and network-level packet tracking is dynamically exposed through the decoupled `/progress` endpoint serving frontend metric UI updates. *Note on local testing: Due to macOS kernel restrictions on BSD sockets dropping local multicast packets, local `ffmpeg` streams must be natively targeted to loopback unicast (`udp://127.0.0.1:4001`) rather than multicast.*
-   - **Deprecated Python Core**: The previous experimental FastAPI backend pipeline code remains inside `backend/` strictly for historical reference and Python data-science testing pipelines (i.e. `tests/run_swift_battery.py`).
-3. **Log Aggregator**:
-   - Simulated network ingestion logs (originating from combinations of Source Nodes, Backbones, and Distro Dests) are logged inside a local persistent **SQLite** database (`backend/sqlite.db`), tracked exclusively via **Swift Fluent ORM**. All recorded timestamps must be precisely formatted as ISO-8601 strings to ensure deterministic cross-compatibility with the legacy Python SQLAlchemy architecture.
-   - **Centralized Logging Override**: The global `print` function within the Swift `App` module has been overridden (see `AppLogger.swift`). This internally wraps all standard diagnostic service logs into a `swift-log` handler (`appLogger.info(...)`), intrinsically guaranteeing every debug frame gracefully prints with ISO-8601 precision timestamps aligning organically with Vapor.
+1. **Frontend (SwiftUI + SwiftUI Glassmorphism)**: 
+   - A highly reactive macOS application UI targeting macOS 14+ (Sonoma and newer).
+   - Designed with an ultra-premium aesthetic utilizing raw `.ultraThinMaterial` backgrounds and modern, monospaced typography.
+   - Monitors timeline intelligence, live stream health status, and dynamic internal hardware consumption (CPU, Memory, GPU) across adjustable timeframes.
+   - Incorporates TabView-based navigation featuring a real-time **Dashboard** and a persistent **History** tab utilizing native macOS `Table` components.
+   - Dynamically subscribes to real-time `SwiftData` context updates via `@Query`, seamlessly pulling background hardware extraction telemetry.
+
+2. **Ingestion Engine & Hardware Extraction**:
+   - The former Vapor engine is now completely decoupled. The platform receives A/V payloads completely autonomously natively bypassing network abstraction bottlenecks.
+   - Delegates local processing to **AVFoundation/AVAssetReader**, carving out frames directly into memory, dramatically outscaling sub-process FFmpeg extraction speeds.
+   - **Live Multicast Integration (`LiveStreamService`)**: A dedicated concurrent actor natively ingests infinite UDP streams using low-level **BSD Sockets**. Processing leverages a multi-track parsing engine (`TSDemuxer`) extracting and locking onto both Audio and Video payloads simultaneously along with exact 33-bit Presentation Time Stamps (PTS). The Video track executes zero-copy hardware decoding via Apple Silicon's native VideoToolbox (`H264Decoder`).
+
+3. **Analysis Engine (OpenCV & Ollama Vision)**:
+   - Streams frames concurrently via standard Swift `Actor` execution loops. Math matrix routines executed natively via `vImage` and `Accelerate` check for laplacian threshold differences replacing heavyweight external dependencies.
+   - All cleanly extracted frames fall through to **AI Analyzers (Ollama Vision Language Models)** running locally, utilizing the minimal `moondream` vision model for high-priority classification and defaulting to `llava` on validation failure.
+
+4. **Telemetry Logging (`SwiftData`)**:
+   - The application relies entirely on Apple’s **SwiftData** framework, bypassing third-party ORMs like Vapor’s Fluent. 
+   - Uses the `@Model` macro to asynchronously inject `VideoLog` definitions natively into local `ModelContext`, triggering `@Observable` view rebuilds flawlessly across threads.
 
 ---
 
 ## 🚀 Getting Started
 
-The platform runs two distinct services natively.
+No Node.js or Vapor installation is required!
 
 ### 1. Requirements
-Ensure you are running **Python 3.10+** and **Node 18+**. 
-Your system must also have `ffmpeg` installed to extract and process streams. 
+Your system must have:
+- **macOS 14.0** (Sonoma) or newer.
+- **Xcode 15+** installed to properly compile SwiftData macros.
+- **Ollama** installed on your system running the `moondream` and `llava` vision language models:
+  - `brew install ollama`
+  - `brew services start ollama`
+  - `ollama pull moondream`
+  - `ollama pull llava`
 
-To enable the AI vision analysis, you will also need to have **Ollama** installed on your system running the `moondream` and `llava` vision language models:
-- `brew install ollama`
-- `brew services start ollama`
-- `ollama pull moondream`
-- `ollama pull llava`
+### 2. Run the Application natively (macOS)
 
-*(Note: Using `brew services start ollama` registers Ollama as a background daemon that runs continuously and starts automatically on reboot. You do not need to manually start it alongside the backend/frontend scripts. If Ollama is unavailable, the pipeline gracefully falls back to a simulated "OK" state without crashing)*
+You do not need an Xcode project (`.xcodeproj`) file! Modern Xcode securely comprehends the `Package.swift` hierarchy perfectly.
 
-### 2. Run the Production Backend
+1. Open a terminal and run:
+   ```bash
+   open -a Xcode mac-frontend/Package.swift
+   ```
+2. Wait a brief moment for Xcode to recursively resolve the internal package graph.
+3. In the top toolbar, ensure the Scheme is set to **`EyesOnGlass`** (the tool icon) and the target destination is set to **`My Mac`**.
+4. Press **`Cmd + R`** to Build and Run! 
 
-The backend has been ported purely to Swift Vapor for robust Apple Silicon compatibility!
-To launch the backend seamlessly, use the dedicated bash integration script located at the project root:
+The glassmorphic macOS application will appear instantly, granting you access to initialize the `LiveStreamService` natively over `UDP`.
 
+### 3. Packaging the Application for Distribution
+
+Because `Package.swift` builds a raw executable, Xcode's standard **Product > Archive** framework is disabled. If you want to bundle the application into a properly structured macOS `.app` bundle, use the included packaging scripts:
+
+1. Open a terminal and navigate to the frontend directory:
+   ```bash
+   cd mac-frontend
+   ```
+2. Run the packaging shell script:
+   ```bash
+   ./Scripts/package_app.sh
+   ```
+3. A fully constructed `EyesOnGlass.app` bundle will be generated in the root of the `mac-frontend` folder, complete with a nested `Info.plist`, compiled macOS resources, and ad-hoc code-signing!
+
+### 4. Automated Testing
+
+The Swift Package Manager contains unit tests targeting the new Application layers. 
+
+From terminal:
 ```bash
-./start_production.sh
+cd mac-frontend
+swift test
 ```
-
-This officially mounts the API interface globally.
-*(Note: Extracted anomalies will populate locally into `backend/thumbnails`.)*
-
-> **Hardware Telemetry Warning**: To access real macOS Apple Silicon **GPU % utilization metrics** inside the dashboard's System Resources graph, the `start_production.sh` script automatically wraps the final Swift binary trigger in `sudo`. This unlocks proper execution of `powermetrics`. The background telemetry securely inherits the host process's root privileges without requiring any secondary credentials or `.env` configuration files.
-
-### Networking & Limits
-- **CORS API Middleware**: The Vapor engine emits Cross-Origin Resource Sharing (CORS) headers by default. This permits any external frontend (like Vite running on `localhost:5173`) to seamlessly pipe payloads directly into `127.0.0.1:8080` without experiencing browser blockage.
-- **Payload Constraints**: Vapor's default 16MB file threshold has been aggressively scaled up. The core effectively eats payload sizes of up to **1GB**, allowing raw TS and MP4 ingest functionality without HTTP 413 drops.
-
-### 3. Run the Web Dashboard
-
-Open a separate terminal and navigate back to the project root.
-
-```bash
-cd frontend
-npm install
-cd ..
-./frontend/run.sh
-```
-Alternatively, just execute `./frontend/run.sh` from the root directly on subsequent runs.
-Navigate to `http://localhost:5173`. 
-You can use the **"Monitor Stream"** button to dispatch local `.ts` and `.mp4` video elements directly into the AI parsing pipeline.
-
-### 4. Run the Tests
-
-A solid testing baseline exists for both the React dashboard and the FastAPI orchestration backend. Furthermore, a CI pipeline is active under `.github/workflows/test.yml` to trigger concurrent Ubuntu execution agents on push.
-To locally verify project fidelity:
-- **Swift Vapor Backend Suite**: `cd swift-backend && swift test`
-- **Legacy Python Test Suite**: `cd backend && source .venv/bin/activate && PYTHONPATH=. pytest tests/`
-- **Frontend Test Suite**: `cd frontend && npm test`
-- **Platform Integration Battery**: `cd tests && python3 run_swift_battery.py`
+Or use the native `Cmd + U` shortcut directly within Xcode.
 
 ---
 
-## 🔮 Future Enhancements (By 2026)
-- **Real-time Pipeline**: Connect the Python ingest module directly to live ingest servers (SRT / UDP multicasts) rather than static file uploads.
-- **Enhanced Data Retention**: Export logs for large-scale viewing using Prometheus/Grafana combinations.
+## 🔮 Future Enhancements
+- **Enhanced Data Retention**: Export `SwiftData` logs into iCloud via `CloudKit` syncing across multiple observer devices.
+- **Remote Telemetry Dashboards**: Implement secondary streaming metrics locally through Swift Charts.

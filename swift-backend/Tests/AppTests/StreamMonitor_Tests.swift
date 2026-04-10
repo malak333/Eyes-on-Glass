@@ -76,7 +76,7 @@ final class StreamMonitor_Tests: XCTestCase {
         
         let videoHealth = VideoHealth(frame: frame)
         let staleVideoPTS: Int64 = 100
-        let freshVideoPTS: Int64 = 100 + 45_000 + 10 // Beyond stale threshold
+        let freshVideoPTS: Int64 = 100 + 90000 + 45_000 + 10 // Beyond stale threshold AND >= 90000 (1 sec)
         let expectation1 = XCTestExpectation(description: "Wait for stale CVPixelBuffer callback with timeout fallback")
         let expectation2 = XCTestExpectation(description: "Wait for fresh CVPixelBuffer callback with timeout fallback")
         
