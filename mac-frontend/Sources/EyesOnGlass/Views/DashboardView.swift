@@ -58,6 +58,35 @@ struct DashboardView: View {
 struct LogEventRow: View {
     let log: VideoLog
     
+    private var issueIconName: String {
+        switch log.issueType {
+        case "ok": return "checkmark.circle"
+        case "stream_lost": return "wifi.exclamationmark"
+        case "stream_restored": return "wifi"
+        case "audio_lost": return "speaker.slash"
+        case "audio_restored": return "speaker.wave.2"
+        case "video_lost": return "video.slash"
+        case "video_restored": return "video"
+        default: return "waveform.path.ecg"
+        }
+    }
+    
+    private var issueTypeColor: Color {
+        switch log.issueType {
+        case "ok", "stream_restored", "audio_restored", "video_restored": return .green
+        case "stream_lost", "audio_lost", "video_lost": return .orange
+        default: return .secondary
+        }
+    }
+    
+    private var issueTypeTextColor: Color {
+        switch log.issueType {
+        case "ok", "stream_restored", "audio_restored", "video_restored": return .green
+        case "stream_lost", "audio_lost", "video_lost": return .orange
+        default: return .red
+        }
+    }
+
     var body: some View {
         HStack(spacing: 16) {
             Group {
@@ -88,8 +117,8 @@ struct LogEventRow: View {
                     Rectangle()
                         .fill(Color(NSColor.windowBackgroundColor))
                         .overlay(
-                            Image(systemName: log.issueType == "ok" ? "checkmark.circle" : "waveform.path.ecg")
-                                .foregroundColor(log.issueType == "ok" ? .green : .secondary)
+                            Image(systemName: issueIconName)
+                                .foregroundColor(issueTypeColor)
                                 .font(.title2)
                         )
                 }
@@ -99,9 +128,9 @@ struct LogEventRow: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2), lineWidth: 1))
             
             VStack(alignment: .leading, spacing: 4) {
-                Text(log.issueType.uppercased())
+                Text(log.issueType.replacingOccurrences(of: "_", with: " ").uppercased())
                     .font(.headline)
-                    .foregroundColor(log.issueType == "ok" ? .green : .red)
+                    .foregroundColor(issueTypeTextColor)
                 
                 Text(String(format: "PTS: %.3f • Engine: %@", log.timestampSec, log.analysisEngine ?? "unknown"))
                     .font(.subheadline)

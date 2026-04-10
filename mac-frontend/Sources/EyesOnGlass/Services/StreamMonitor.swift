@@ -15,12 +15,12 @@ public actor StreamMonitor {
     private let syncWindowTicks: Int64 = 22_500 // 250ms tolerance for A/V sync
     
     // Callback to pass the successfully evaluated frame back out
-    private var onSyncedCallback: ((CVPixelBuffer) -> Void)?
+    private var onSyncedCallback: ((CVPixelBuffer, AudioHealth) -> Void)?
     private var lastProcessedPTS: Int64? = nil
     
     public init() {}
     
-    public func setOnSynced(_ callback: @escaping (CVPixelBuffer) -> Void) {
+    public func setOnSynced(_ callback: @escaping (CVPixelBuffer, AudioHealth) -> Void) {
         self.onSyncedCallback = callback
     }
     
@@ -93,7 +93,7 @@ public actor StreamMonitor {
             print("StreamMonitor: Sync Validated! PTS: \(pts) | Video: Healthy | Audio: \(audio == .healthy ? "Healthy" : "Silent")")
             
             // Continue the pipeline at 1 FPS
-            onSyncedCallback?(video.frame)
+            onSyncedCallback?(video.frame, audio)
         }
     }
 }

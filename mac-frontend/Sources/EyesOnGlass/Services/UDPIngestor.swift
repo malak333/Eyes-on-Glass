@@ -19,22 +19,41 @@ public actor UDPIngestor {
     private var streamContinuation: AsyncStream<Data>.Continuation?
     
     // Callback for LiveStreamService
-    private var onFrameCallback: ((CVPixelBuffer) -> Void)?
+    private var onFrameCallback: ((CVPixelBuffer, AudioHealth) -> Void)?
     private var onPacketCallback: ((Int) -> Void)?
     private var bridge: IngestorBridge?
     private var packetCount: Int = 0
+    private var onStreamLostCallback: (() -> Void)?
+    private var onStreamRestoredCallback: (() -> Void)?
+    private var isStreamLost = false
+    private var onVideoLostCallback: (() -> Void)?
+    private var onVideoRestoredCallback: (() -> Void)?
+    private var isVideoLost = false
+    private var lastVideoTime: TimeInterval = 0
     
     public init() {}
     
-    public func start(uri: String, onFrame: @escaping (CVPixelBuffer) -> Void, onPacket: @escaping (Int) -> Void) async {
+    public func start(
+        uri: String, 
+        onFrame: @escaping (CVPixelBuffer, AudioHealth) -> Void, 
+        onPacket: @escaping (Int) -> Void,
+        onStreamLost: @escaping () -> Void = {},
+        onStreamRestored: @escaping () -> Void = {},
+        onVideoLost: @escaping () -> Void = {},
+        onVideoRestored: @escaping () -> Void = {}
+    ) async {
         guard !isActive else { return }
         isActive = true
         self.onFrameCallback = onFrame
         self.onPacketCallback = onPacket
+        self.onStreamLostCallback = onStreamLost
+        self.onStreamRestoredCallback = onStreamRestored
+        self.onVideoLostCallback = onVideoLost
+        self.onVideoRestoredCallback = onVideoRestored
         
-        await streamMonitor.setOnSynced { [weak self] frame in
+        await streamMonitor.setOnSynced { [weak self] frame, audio in
             guard let self = self else { return }
-            Task { await self.forwardFrame(frame) }
+            Task { await self.forwardFrame(frame, audio: audio) }
         }
         
         let newBridge = IngestorBridge(actor: self, monitor: streamMonitor)
@@ -157,6 +176,7 @@ public actor UDPIngestor {
         _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         
         self.lastPacketTime = Date().timeIntervalSince1970
+        self.lastVideoTime = Date().timeIntervalSince1970
         
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue.global(qos: .userInitiated))
         let continuation = self.streamContinuation
@@ -186,10 +206,19 @@ public actor UDPIngestor {
     
     private func handleData(_ data: Data) {
         lastPacketTime = Date().timeIntervalSince1970
+        if isStreamLost {
+            isStreamLost = false
+            onStreamRestoredCallback?()
+        }
         let events = demuxer.process(data: data)
         for event in events {
             switch event {
             case .nalUnit(let nal, let pts, let dts):
+                lastVideoTime = Date().timeIntervalSince1970
+                if isVideoLost {
+                    isVideoLost = false
+                    onVideoRestoredCallback?()
+                }
                 videoDecoder.decode(nalUnit: nal, pts: pts, dts: dts)
             case .audio(let audio, let pts):
                 audioDecoder.decode(audioPayload: audio, pts: pts)
@@ -205,11 +234,22 @@ public actor UDPIngestor {
     private func startHeartbeat(uri: String) {
         heartbeatTask = Task {
             while isActive {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
                 if Task.isCancelled { break }
                 
                 let now = Date().timeIntervalSince1970
+                if now - self.lastVideoTime > 3.0 && !self.isStreamLost {
+                    if !self.isVideoLost {
+                        self.isVideoLost = true
+                        self.onVideoLostCallback?()
+                    }
+                }
+                
                 if now - self.lastPacketTime > 5.0 {
+                    if !self.isStreamLost {
+                        self.isStreamLost = true
+                        self.onStreamLostCallback?()
+                    }
                     if self.socketFD >= 0 {
                         print("UDPIngestor: Heartbeat timeout on \(uri). Resetting connection...")
                         if let source = self.readSource {
@@ -225,8 +265,8 @@ public actor UDPIngestor {
         }
     }
     
-    fileprivate func forwardFrame(_ frame: CVPixelBuffer) {
-        onFrameCallback?(frame)
+    fileprivate func forwardFrame(_ frame: CVPixelBuffer, audio: AudioHealth) {
+        onFrameCallback?(frame, audio)
     }
 }
 

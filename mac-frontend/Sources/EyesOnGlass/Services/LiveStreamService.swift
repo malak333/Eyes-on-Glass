@@ -8,11 +8,10 @@ actor LiveStreamService {
     
     private var ingestor: UDPIngestor?
     private var isActive = false
-    private var activeSessionName: String?
-    
     private var lastOkLogTime: TimeInterval = 0
     private var frameCount: Int = 0
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    private var wasAudioHealthy: Bool? = nil
     
     func startMonitoring(uri: String, sessionName: String, ) async {
         if isActive {
@@ -22,6 +21,7 @@ actor LiveStreamService {
         activeSessionName = sessionName
         lastOkLogTime = 0 
         frameCount = 0
+        wasAudioHealthy = nil
         
         let thumbnailsDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/EyesOnGlass/thumbnails")
         try? FileManager.default.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
@@ -30,13 +30,73 @@ actor LiveStreamService {
         self.ingestor = newIngestor
         
         Task {
-            await newIngestor.start(uri: uri, onFrame: { pixelBuffer in
+            await newIngestor.start(uri: uri, onFrame: { pixelBuffer, audioHealth in
                 Task {
-                    await self.processFrame(pixelBuffer: pixelBuffer, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
+                    await self.processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
                 }
             }, onPacket: { count in
                 Task {
                     await ExtractionProgress.shared.setPackets(count, for: sessionName)
+                }
+            }, onStreamLost: {
+                Task {
+                    let ts = Double(self.frameCount)
+                    await StreamController.shared.insertVideoLog(
+                        videoFilename: sessionName,
+                        timestampSec: ts,
+                        nodeSource: "Live-Multicast",
+                        nodeBackbone: "East-Backbone-Live",
+                        nodeDest: "Distribution-Node",
+                        issueType: "stream_lost",
+                        issueScore: 1.0,
+                        analysisEngine: "ingestor",
+                        thumbnailPath: nil
+                    )
+                }
+            }, onStreamRestored: {
+                Task {
+                    let ts = Double(self.frameCount)
+                    await StreamController.shared.insertVideoLog(
+                        videoFilename: sessionName,
+                        timestampSec: ts,
+                        nodeSource: "Live-Multicast",
+                        nodeBackbone: "East-Backbone-Live",
+                        nodeDest: "Distribution-Node",
+                        issueType: "stream_restored",
+                        issueScore: 1.0,
+                        analysisEngine: "ingestor",
+                        thumbnailPath: nil
+                    )
+                }
+            }, onVideoLost: {
+                Task {
+                    let ts = Double(self.frameCount)
+                    await StreamController.shared.insertVideoLog(
+                        videoFilename: sessionName,
+                        timestampSec: ts,
+                        nodeSource: "Live-Multicast",
+                        nodeBackbone: "East-Backbone-Live",
+                        nodeDest: "Distribution-Node",
+                        issueType: "video_lost",
+                        issueScore: 1.0,
+                        analysisEngine: "ingestor",
+                        thumbnailPath: nil
+                    )
+                }
+            }, onVideoRestored: {
+                Task {
+                    let ts = Double(self.frameCount)
+                    await StreamController.shared.insertVideoLog(
+                        videoFilename: sessionName,
+                        timestampSec: ts,
+                        nodeSource: "Live-Multicast",
+                        nodeBackbone: "East-Backbone-Live",
+                        nodeDest: "Distribution-Node",
+                        issueType: "video_restored",
+                        issueScore: 1.0,
+                        analysisEngine: "ingestor",
+                        thumbnailPath: nil
+                    )
                 }
             })
         }
@@ -53,11 +113,41 @@ actor LiveStreamService {
         activeSessionName = nil
     }
     
-    private func processFrame(pixelBuffer: CVPixelBuffer, sessionName: String, thumbnailsDir: URL, ) async {
+    private func processFrame(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, sessionName: String, thumbnailsDir: URL, ) async {
         guard isActive, sessionName == activeSessionName else { return }
         
         let currentFrameIndex = frameCount
         frameCount += 1
+        
+        let isAudioHealthy = (audioHealth == .healthy)
+        if let previous = wasAudioHealthy {
+            if previous && !isAudioHealthy {
+                await StreamController.shared.insertVideoLog(
+                    videoFilename: sessionName,
+                    timestampSec: Double(currentFrameIndex),
+                    nodeSource: "Live-Multicast",
+                    nodeBackbone: "East-Backbone-Live",
+                    nodeDest: "Distribution-Node",
+                    issueType: "audio_lost",
+                    issueScore: 1.0,
+                    analysisEngine: "ingestor",
+                    thumbnailPath: nil
+                )
+            } else if !previous && isAudioHealthy {
+                await StreamController.shared.insertVideoLog(
+                    videoFilename: sessionName,
+                    timestampSec: Double(currentFrameIndex),
+                    nodeSource: "Live-Multicast",
+                    nodeBackbone: "East-Backbone-Live",
+                    nodeDest: "Distribution-Node",
+                    issueType: "audio_restored",
+                    issueScore: 1.0,
+                    analysisEngine: "ingestor",
+                    thumbnailPath: nil
+                )
+            }
+        }
+        wasAudioHealthy = isAudioHealthy
         
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return }
