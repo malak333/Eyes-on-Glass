@@ -21,10 +21,11 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
    - The former Vapor engine is now completely decoupled. The platform receives A/V payloads completely autonomously natively bypassing network abstraction bottlenecks.
    - Delegates local processing to **AVFoundation/AVAssetReader**, carving out frames directly into memory, dramatically outscaling sub-process FFmpeg extraction speeds.
    - **Live Multicast Integration (`LiveStreamService`)**: A dedicated concurrent actor natively ingests infinite UDP streams using low-level **BSD Sockets**. Processing leverages a multi-track parsing engine (`TSDemuxer`) extracting and locking onto both Audio and Video payloads simultaneously along with exact 33-bit Presentation Time Stamps (PTS). The Video track executes zero-copy hardware decoding via Apple Silicon's native VideoToolbox (`H264Decoder`).
+   - **Real-Time Audio Telemetry**: The audio stream is actively monitored via ADTS AAC payload analysis. `AVAudioConverter` transforms incoming AAC packets into `Float32` linear PCM, which is immediately handed to Apple's **Accelerate** (vDSP) framework to run zero-latency Fast Fourier Transforms (FFTs) and Phase Correlation computations. These signals are piped dynamically to SwiftUI canvases to render real-time Waveforms, Vectorscopes, and Audio Phase arrays at 30 fps.
 
-3. **Analysis Engine (OpenCV & Ollama Vision)**:
+3. **Analysis Engine (`mlx-swift` & Gemma 4)**:
    - Streams frames concurrently via standard Swift `Actor` execution loops. Math matrix routines executed natively via `vImage` and `Accelerate` check for laplacian threshold differences replacing heavyweight external dependencies.
-   - All cleanly extracted frames fall through to **AI Analyzers (Ollama Vision Language Models)** running locally, utilizing the minimal `moondream` vision model for high-priority classification and defaulting to `llava` on validation failure.
+   - All cleanly extracted frames fall through to **Native AI Analyzers (`mlx-swift`)** utilizing Hugging Face Hub downloads to natively run Google Gemma 4 Multimodal family directly in Unified Memory.
 
 4. **Telemetry Logging (`SwiftData`)**:
    - The application relies entirely on Apple’s **SwiftData** framework, bypassing third-party ORMs like Vapor’s Fluent. 
@@ -40,11 +41,10 @@ No Node.js or Vapor installation is required!
 Your system must have:
 - **macOS 14.0** (Sonoma) or newer.
 - **Xcode 15+** installed to properly compile SwiftData macros.
-- **Ollama** installed on your system running the `moondream` and `llava` vision language models:
-  - `brew install ollama`
-  - `brew services start ollama`
-  - `ollama pull moondream`
-  - `ollama pull llava`
+- **Hugging Face Account**: The vision pipeline relies on native `mlx-swift` to run Gemma 4 models.
+  - You must accept the Gemma model agreements on [Hugging Face](https://huggingface.co/google/gemma-4-e2b-mlx-4bit).
+  - You must generate a Hugging Face Access Token (with "Read" permissions).
+  - Open the Eyes on Glass application and enter this token into the "Hugging Face Token" secure field to download and prepare the models natively.
 
 ### 2. Run the Application natively (macOS)
 

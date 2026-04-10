@@ -20,6 +20,7 @@ public actor UDPIngestor {
     
     // Callback for LiveStreamService
     private var onFrameCallback: ((CVPixelBuffer, AudioHealth) -> Void)?
+    private var onAudioVisualsCallback: (([Float], [CGPoint], [Float]) -> Void)?
     private var onPacketCallback: ((Int) -> Void)?
     private var bridge: IngestorBridge?
     private var packetCount: Int = 0
@@ -32,11 +33,26 @@ public actor UDPIngestor {
     private var isVideoLost = false
     private var lastVideoTime: TimeInterval = 0
     
+    // UI Audio Visuals
+    private var audioWaveform: [Float] = []
+    private var audioVectorscope: [CGPoint] = []
+    private var audioPhase: [Float] = []
+    
+    public var streamInfo: (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
+        return (demuxer.currentVideoPID, demuxer.currentAudioPID, videoDecoder.videoSize, audioDecoder.sampleRate, audioDecoder.channels, audioDecoder.audioCodec, audioDecoder.audioBitrate, audioDecoder.loudness, audioDecoder.truePeak, audioDecoder.dialNorm, demuxer.currentTsID, demuxer.currentProgramID, demuxer.currentServicesCount, demuxer.currentSdtChannel, demuxer.currentSdtProvider, videoDecoder.videoColor, videoDecoder.gopSize, videoDecoder.frameRate, demuxer.currentTsClock, demuxer.currentPcrJitter, demuxer.currentPcrInterval)
+    }
+    
+    public var audioVisuals: (waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+        return (audioWaveform, audioVectorscope, audioPhase)
+    }
+    
     public init() {}
     
     public func start(
         uri: String, 
         onFrame: @escaping (CVPixelBuffer, AudioHealth) -> Void, 
+        onVideoFrame: @escaping (CVPixelBuffer) -> Void,
+        onAudioVisuals: @escaping ([Float], [CGPoint], [Float]) -> Void,
         onPacket: @escaping (Int) -> Void,
         onCCError: @escaping () -> Void = {},
         onStreamLost: @escaping () -> Void = {},
@@ -47,6 +63,7 @@ public actor UDPIngestor {
         guard !isActive else { return }
         isActive = true
         self.onFrameCallback = onFrame
+        self.onAudioVisualsCallback = onAudioVisuals
         self.onPacketCallback = onPacket
         self.onStreamLostCallback = onStreamLost
         self.onStreamRestoredCallback = onStreamRestored
@@ -59,7 +76,12 @@ public actor UDPIngestor {
             Task { await self.forwardFrame(frame, audio: audio) }
         }
         
-        let newBridge = IngestorBridge(actor: self, monitor: streamMonitor)
+        let newBridge = IngestorBridge(
+            actor: self, 
+            monitor: streamMonitor,
+            onVideoFrame: onVideoFrame,
+            onAudioVisuals: onAudioVisuals
+        )
         self.bridge = newBridge
         
         videoDecoder.delegate = newBridge
@@ -272,18 +294,35 @@ public actor UDPIngestor {
     fileprivate func forwardFrame(_ frame: CVPixelBuffer, audio: AudioHealth) {
         onFrameCallback?(frame, audio)
     }
+    
+
+    fileprivate func updateAudioVisuals(waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+        self.audioWaveform = waveform
+        self.audioVectorscope = vectorscope
+        self.audioPhase = phase
+        onAudioVisualsCallback?(waveform, vectorscope, phase)
+    }
+    
+    public func setMuted(_ muted: Bool) {
+        audioDecoder.isMuted = muted
+    }
 }
 
 fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
     weak var actor: UDPIngestor?
     let monitor: StreamMonitor
+    let onVideoFrame: ((CVPixelBuffer) -> Void)?
+    let onAudioVisuals: (([Float], [CGPoint], [Float]) -> Void)?
     
-    init(actor: UDPIngestor, monitor: StreamMonitor) {
+    init(actor: UDPIngestor, monitor: StreamMonitor, onVideoFrame: ((CVPixelBuffer) -> Void)?, onAudioVisuals: (([Float], [CGPoint], [Float]) -> Void)?) {
         self.actor = actor
         self.monitor = monitor
+        self.onVideoFrame = onVideoFrame
+        self.onAudioVisuals = onAudioVisuals
     }
     
     func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer, pts: Int64) {
+        onVideoFrame?(frame)
         Task {
             let video = VideoHealth(frame: frame)
             await monitor.report(pts: pts, video: video, audio: nil)
@@ -293,6 +332,13 @@ fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
     func decoder(_ decoder: AudioDecoder, didDecodeHealth health: AudioHealth, pts: Int64) {
         Task {
             await monitor.report(pts: pts, video: nil, audio: health)
+        }
+    }
+    
+    func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+        onAudioVisuals?(waveform, vectorscope, phase)
+        Task {
+            await actor?.updateAudioVisuals(waveform: waveform, vectorscope: vectorscope, phase: phase)
         }
     }
 }

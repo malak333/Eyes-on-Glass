@@ -22,6 +22,33 @@ public class TSDemuxer {
     private var lockedVideoPID: UInt16? = nil
     private var lockedAudioPID: UInt16? = nil
     
+    public var currentVideoPID: UInt16? { lockedVideoPID }
+    public var currentAudioPID: UInt16? { lockedAudioPID }
+    
+    // Extracted TS Info
+    private var tsID: UInt16? = nil
+    private var programID: UInt16? = nil
+    private var servicesCount: Int = 0
+    private var sdtChannel: String? = nil
+    private var sdtProvider: String? = nil
+    
+    // PCR State
+    private var lastPCRBase: UInt64? = nil
+    private var lastPCRReceiveTime: TimeInterval? = nil
+    private var currentPCRJitter: Double? = nil
+    private var currentPCRInterval: Double? = nil
+    private var tsClockString: String? = nil
+    
+    public var currentTsClock: String? { tsClockString }
+    public var currentPcrJitter: Double? { currentPCRJitter }
+    public var currentPcrInterval: Double? { currentPCRInterval }
+    
+    public var currentTsID: UInt16? { tsID }
+    public var currentProgramID: UInt16? { programID }
+    public var currentServicesCount: Int { servicesCount }
+    public var currentSdtChannel: String? { sdtChannel }
+    public var currentSdtProvider: String? { sdtProvider }
+    
     private var currentVideoPTS: Int64 = 0
     private var currentVideoDTS: Int64? = nil
     private var currentAudioPTS: Int64 = 0
@@ -66,6 +93,48 @@ public class TSDemuxer {
         var payloadOffset = 4
         if adaptationFieldControl == 2 || adaptationFieldControl == 3 {
             let adaptationLength = Int(packet[4])
+            if adaptationLength > 0 && 5 + adaptationLength <= tsPacketSize {
+                let flags = packet[5]
+                let pcrFlag = (flags & 0x10) != 0
+                if pcrFlag && adaptationLength >= 7 {
+                    let pcrBase1 = UInt64(packet[6]) << 25
+                    let pcrBase2 = UInt64(packet[7]) << 17
+                    let pcrBase3 = UInt64(packet[8]) << 9
+                    let pcrBase4 = UInt64(packet[9]) << 1
+                    let pcrBase5 = UInt64(packet[10] & 0x80) >> 7
+                    let pcrBase = pcrBase1 | pcrBase2 | pcrBase3 | pcrBase4 | pcrBase5
+                    
+                    let currentTime = Date().timeIntervalSince1970
+                    let pcrTimeSecs = Double(pcrBase) / 90000.0
+                    
+                    let totalSeconds = Int(pcrTimeSecs)
+                    let hours = totalSeconds / 3600
+                    let minutes = (totalSeconds % 3600) / 60
+                    let seconds = totalSeconds % 60
+                    let milliseconds = Int((pcrTimeSecs - Double(totalSeconds)) * 1000)
+                    tsClockString = String(format: "%02d:%02d:%02d.%03d", hours, minutes, seconds, milliseconds)
+                    
+                    if let lastReceived = lastPCRReceiveTime {
+                        let intervalMs = (currentTime - lastReceived) * 1000.0
+                        currentPCRInterval = intervalMs
+                        
+                        if let lastPCR = lastPCRBase {
+                            let deltaPCRSecs = Double(pcrBase) / 90000.0 - Double(lastPCR) / 90000.0
+                            if deltaPCRSecs > 0 {
+                                let jitterMs = abs((currentTime - lastReceived) - deltaPCRSecs) * 1000.0
+                                if let existing = currentPCRJitter {
+                                    currentPCRJitter = existing * 0.9 + jitterMs * 0.1
+                                } else {
+                                    currentPCRJitter = jitterMs
+                                }
+                            }
+                        }
+                    }
+                    
+                    lastPCRBase = pcrBase
+                    lastPCRReceiveTime = currentTime
+                }
+            }
             payloadOffset += 1 + adaptationLength
         }
         
@@ -74,6 +143,12 @@ public class TSDemuxer {
         let payload = Data(packet.suffix(from: payloadOffset))
         
         if pusi {
+            if pid == 0x0000 {
+                parsePAT(payload: payload, pusi: pusi)
+            } else if pid == 0x0011 {
+                parseSDT(payload: payload, pusi: pusi)
+            }
+            
             if payload.count > 6 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01 {
                 let streamID = payload[3]
                 let isVideo = streamID >= 0xE0 && streamID <= 0xEF
@@ -270,6 +345,88 @@ public class TSDemuxer {
         }
     }
     
+    private func parsePAT(payload: Data, pusi: Bool) {
+        guard pusi, payload.count > 1 else { return }
+        let pointer = Int(payload[0])
+        let offset = 1 + pointer
+        guard offset + 8 < payload.count else { return }
+        
+        let tableID = payload[offset]
+        if tableID == 0x00 { // PAT
+            let sectionLength = Int((UInt16(payload[offset+1] & 0x0F) << 8) | UInt16(payload[offset+2]))
+            guard offset + 3 + sectionLength <= payload.count else { return }
+            
+            tsID = (UInt16(payload[offset+3]) << 8) | UInt16(payload[offset+4])
+            
+            let programsLength = sectionLength - 5 - 4 // minus header and CRC32
+            if programsLength > 0 {
+                servicesCount = programsLength / 4
+                // Extract first valid program ID
+                for i in stride(from: offset + 8, to: offset + 8 + programsLength, by: 4) {
+                    if i + 3 < payload.count {
+                        let pn = (UInt16(payload[i]) << 8) | UInt16(payload[i+1])
+                        if pn != 0x0000 {
+                            programID = pn
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func parseSDT(payload: Data, pusi: Bool) {
+        guard pusi, payload.count > 1 else { return }
+        let pointer = Int(payload[0])
+        let offset = 1 + pointer
+        guard offset + 11 < payload.count else { return }
+        
+        let tableID = payload[offset]
+        if tableID == 0x42 || tableID == 0x46 { // Actual TS or Other TS
+            let sectionLength = Int((UInt16(payload[offset+1] & 0x0F) << 8) | UInt16(payload[offset+2]))
+            guard offset + 3 + sectionLength <= payload.count else { return }
+            
+            var currentOffset = offset + 11
+            let endOffset = offset + 3 + sectionLength - 4 // before CRC32
+            
+            while currentOffset + 4 < endOffset {
+                let descriptorsLoopLength = Int((UInt16(payload[currentOffset+3] & 0x0F) << 8) | UInt16(payload[currentOffset+4]))
+                var descOffset = currentOffset + 5
+                let descEnd = descOffset + descriptorsLoopLength
+                
+                while descOffset + 2 <= descEnd && descOffset + 2 <= payload.count {
+                    let descriptorTag = payload[descOffset]
+                    let descriptorLength = Int(payload[descOffset+1])
+                    if descriptorTag == 0x48 && descOffset + 2 + descriptorLength <= descEnd { // Service Descriptor
+                        let serviceType = payload[descOffset+2]
+                        let providerNameLen = Int(payload[descOffset+3])
+                        
+                        var nameOffset = descOffset + 4
+                        if nameOffset + providerNameLen <= payload.count && providerNameLen > 0 {
+                            if let name = String(data: payload[nameOffset..<(nameOffset+providerNameLen)], encoding: .utf8) {
+                                sdtProvider = name.trimmingCharacters(in: .controlCharacters)
+                            }
+                        }
+                        
+                        nameOffset += providerNameLen
+                        if nameOffset < payload.count {
+                            let serviceNameLen = Int(payload[nameOffset])
+                            nameOffset += 1
+                            if nameOffset + serviceNameLen <= payload.count && serviceNameLen > 0 {
+                                if let name = String(data: payload[nameOffset..<(nameOffset+serviceNameLen)], encoding: .utf8) {
+                                    sdtChannel = name.trimmingCharacters(in: .controlCharacters)
+                                }
+                            }
+                        }
+                        break // Parsed service descriptor, done with this service
+                    }
+                    descOffset += 2 + descriptorLength
+                }
+                currentOffset += 5 + descriptorsLoopLength
+            }
+        }
+    }
+    
     public func reset() {
         buffer.removeAll()
         isGatheringVideoPES = false
@@ -283,5 +440,17 @@ public class TSDemuxer {
         currentVideoPTS = 0
         currentVideoDTS = nil
         currentAudioPTS = 0
+        
+        tsID = nil
+        programID = nil
+        servicesCount = 0
+        sdtChannel = nil
+        sdtProvider = nil
+        
+        lastPCRBase = nil
+        lastPCRReceiveTime = nil
+        currentPCRJitter = nil
+        currentPCRInterval = nil
+        tsClockString = nil
     }
 }

@@ -42,6 +42,10 @@ final class StreamControllerTests: XCTestCase {
         
         XCTAssertEqual(controller.connectionStatus, "Disconnected")
         XCTAssertNil(controller.activeSessionName)
+        XCTAssertNil(controller.audioBitrate)
+        XCTAssertNil(controller.audioLoudness)
+        XCTAssertNil(controller.audioTruePeak)
+        XCTAssertNil(controller.audioDialNorm)
     }
     
     @MainActor
@@ -60,5 +64,55 @@ final class StreamControllerTests: XCTestCase {
         
         controller.selectedTimeframe = "30m"
         XCTAssertEqual(controller.selectedTimeframe, "30m")
+    }
+    
+    @MainActor
+    func testAudioVisualizerStateReset() async {
+        let context = modelContainer.mainContext
+        await controller.startMonitoring(uri: "udp://127.0.0.1:4000", context: context)
+        
+        // Mock some visualizer data
+        controller.audioWaveformData = [0.5, 0.6, 0.7]
+        controller.audioPhaseData = [1.0, 2.0]
+        controller.audioVectorscopeData = [CGPoint(x: 1, y: 1)]
+        controller.isVBR = true
+        
+        await controller.stopMonitoring()
+        
+        // Verify audio visualizer arrays are cleared on stop
+        XCTAssertTrue(controller.audioWaveformData.isEmpty)
+        XCTAssertTrue(controller.audioPhaseData.isEmpty)
+        XCTAssertTrue(controller.audioVectorscopeData.isEmpty)
+        XCTAssertFalse(controller.isVBR)
+    }
+    
+    @MainActor
+    func testVideoPropertiesDefaultAndCompute() async {
+        XCTAssertNil(controller.videoAspect)
+        XCTAssertNil(controller.videoFrameRate)
+        XCTAssertNil(controller.videoColor)
+        XCTAssertNil(controller.videoGOPSize)
+        
+        // Compute 16:9
+        controller.videoResolution = CGSize(width: 1920, height: 1080)
+        XCTAssertEqual(controller.videoAspect, "16:9")
+        
+        // Compute 4:3
+        controller.videoResolution = CGSize(width: 720, height: 480)
+        XCTAssertEqual(controller.videoAspect, "4:3")
+        
+        // Compute non-standard
+        controller.videoResolution = CGSize(width: 800, height: 600)
+        XCTAssertEqual(controller.videoAspect, "800:600")
+        
+        controller.videoResolution = nil
+    }
+    
+    @MainActor
+    func testVisualizerVisibilityToggle() async {
+        XCTAssertFalse(controller.isAdvancedInspectorVisible, "Inspector should be hidden by default")
+        
+        controller.isAdvancedInspectorVisible = true
+        XCTAssertTrue(controller.isAdvancedInspectorVisible)
     }
 }

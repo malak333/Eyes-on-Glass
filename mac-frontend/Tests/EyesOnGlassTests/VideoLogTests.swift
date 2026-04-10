@@ -44,7 +44,7 @@ final class VideoLogTests: XCTestCase {
         let log = VideoLog(
             videoFilename: "udp://TEST-STREAM-2",
             timestampSec: 60.123,
-            issueType: "blur",
+            issueType: "black_screen",
             issueScore: 0.95,
             analysisEngine: "ollama",
             thumbnailPath: "live_12345_abc.jpg"

@@ -25,6 +25,34 @@ public class H264Decoder {
     private var needsSessionDrop = false
     private var isWaitingForSync = false
     
+    // Video info properties
+    private var _lastGOPSize: Int = 0
+    private var _currentGOPCount: Int = 0
+    public var gopSize: Int { _lastGOPSize == 0 ? _currentGOPCount : _lastGOPSize }
+    
+    private var lastEmittedPTS: Int64? = nil
+    private var currentFrameRate: Double = 0.0
+    public var frameRate: Double { currentFrameRate }
+    
+    public var videoColor: String? {
+        guard let format = formatDesc else { return nil }
+        if let extensions = CMFormatDescriptionGetExtensions(format) as Dictionary? {
+            if let colorPrimaries = extensions[kCVImageBufferColorPrimariesKey] as? String {
+                if colorPrimaries.contains("709") { return "BT.709" }
+                if colorPrimaries.contains("2020") { return "BT.2020" }
+                if colorPrimaries.contains("601") { return "BT.601" }
+                return colorPrimaries
+            }
+        }
+        return nil
+    }
+    
+    public var videoSize: CGSize? {
+        guard let format = formatDesc else { return nil }
+        let dim = CMVideoFormatDescriptionGetDimensions(format)
+        return CGSize(width: CGFloat(dim.width), height: CGFloat(dim.height))
+    }
+    
     public init() {}
     
     public func decode(nalUnit: Data, pts: Int64, dts: Int64?) {
@@ -121,6 +149,11 @@ public class H264Decoder {
         currentFrameDTS = nil
         isCurrentFrameSync = false
         isWaitingForSync = true
+        
+        _lastGOPSize = 0
+        _currentGOPCount = 0
+        lastEmittedPTS = nil
+        currentFrameRate = 0.0
     }
     
     private func createFormatDescription() {
@@ -209,6 +242,14 @@ public class H264Decoder {
                 isWaitingForSync = true
             }
         }
+        
+        if isCurrentFrameSync {
+            if _currentGOPCount > 0 {
+                _lastGOPSize = _currentGOPCount
+            }
+            _currentGOPCount = 0
+        }
+        _currentGOPCount += 1
         
         if decompressionSession == nil && formatDesc != nil {
             if isCurrentFrameSync {
@@ -325,7 +366,18 @@ public class H264Decoder {
         
         guard status == noErr, let pixelBuffer = imageBuffer else { return }
         let pts = presentationTimeStamp.value
-        print("H264Decoder: VT Callback emitted frame (PTS: \(pts))")
+        
+        if let lastPTS = decoder.lastEmittedPTS {
+            let delta = Double(pts - lastPTS) / 90000.0
+            if delta > 0 && delta < 1.0 {
+                let instFps = 1.0 / delta
+                if decoder.currentFrameRate == 0 { decoder.currentFrameRate = instFps }
+                else { decoder.currentFrameRate = (decoder.currentFrameRate * 0.9) + (instFps * 0.1) }
+            }
+        }
+        decoder.lastEmittedPTS = pts
+        
+        // print("H264Decoder: VT Callback emitted frame (PTS: \(pts))")
         decoder.delegate?.decoder(decoder, didDecode: pixelBuffer, pts: pts)
     }
 }

@@ -7,6 +7,7 @@ struct DashboardView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(filter: #Predicate<VideoLog> { $0.isArchived == false }, sort: \VideoLog.timestampSec, order: .reverse) private var logs: [VideoLog]
     @State private var selectedLog: VideoLog?
+    @State private var showAdvancedInspector: Bool = false
         
     var body: some View {
         NavigationSplitView {
@@ -47,10 +48,22 @@ struct DashboardView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+                
+                ToolbarItem(placement: .primaryAction) {
+                    Toggle(isOn: $showAdvancedInspector) {
+                        Label("Advanced", systemImage: "sidebar.right")
+                    }
+                    .toggleStyle(.button)
+                }
+
             }
         }
         .sheet(item: $selectedLog) { log in
             EventDetailView(log: log)
+        }
+        .inspector(isPresented: $showAdvancedInspector) {
+            AdvancedInspectorView(streamController: streamController)
+                .inspectorColumnWidth(min: 400, ideal: 500, max: 700)
         }
     }
 }
@@ -300,6 +313,8 @@ struct ConnectionSectionView: View {
     @Bindable var streamController: StreamController
     var modelContext: ModelContext
     @AppStorage("streamUri") private var streamUri: String = "udp://239.0.0.1:1234"
+    @State private var hfToken: String = ""
+    @State private var loadedToken: String = ""
     @State private var localUri: String = ""
     @State private var vlmClient = NativeVLMClient.shared
     
@@ -311,16 +326,33 @@ struct ConnectionSectionView: View {
                 .disabled(streamController.connectionStatus == "Active")
                 .onAppear {
                     localUri = streamUri
+                    if let token: String = KeychainHelper.standard.read(service: "com.eyeson.hftoken", account: "user") {
+                        loadedToken = token
+                        hfToken = token
+                    }
                 }
                 .onChange(of: localUri) { oldValue, newValue in
                     streamUri = newValue
+                }
+                
+            SecureField("Hugging Face Token", text: $hfToken)
+                .textFieldStyle(.roundedBorder)
+                .disabled(streamController.connectionStatus == "Active")
+                .onChange(of: hfToken) { oldValue, newValue in
+                    guard newValue != loadedToken else { return }
+                    loadedToken = newValue
+                    if newValue.isEmpty {
+                        KeychainHelper.standard.delete(service: "com.eyeson.hftoken", account: "user")
+                    } else {
+                        KeychainHelper.standard.save(newValue, service: "com.eyeson.hftoken", account: "user")
+                    }
                 }
                 
             Picker("AI Model", selection: Binding(
                 get: { vlmClient.selectedTier },
                 set: { tier in
                     Task {
-                        await vlmClient.prepareModel(tier: tier)
+                        await vlmClient.prepareModel(tier: tier, token: hfToken)
                     }
                 }
             )) {
@@ -334,7 +366,7 @@ struct ConnectionSectionView: View {
             case .notLoaded:
                 Button(action: {
                     let tier = vlmClient.selectedTier
-                    Task { await vlmClient.prepareModel(tier: tier) }
+                    Task { await vlmClient.prepareModel(tier: tier, token: hfToken) }
                 }) {
                     Text("Download & Prepare Model")
                         .frame(maxWidth: .infinity)
@@ -358,7 +390,7 @@ struct ConnectionSectionView: View {
                     .multilineTextAlignment(.center)
                 Button(action: {
                     let tier = vlmClient.selectedTier
-                    Task { await vlmClient.prepareModel(tier: tier) }
+                    Task { await vlmClient.prepareModel(tier: tier, token: hfToken) }
                 }) {
                     Text("Retry Prepare Model")
                         .frame(maxWidth: .infinity)

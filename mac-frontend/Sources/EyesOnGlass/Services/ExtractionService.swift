@@ -461,10 +461,6 @@ struct ExtractionService: Sendable {
                                 issuesFound.append(("snowflakes", 1.0, "opencv"))
                                 videoIssueFound = true
                             }
-                            if cv.isBlurry {
-                                issuesFound.append(("blur", 1.0, "opencv"))
-                                videoIssueFound = true
-                            }
                             let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
                             if macroConfidence >= 0.50 && cv.laplacianVariance > 30.0 {
                                 issuesFound.append(("macroblocking", Double(macroConfidence), "opencv"))
@@ -497,7 +493,7 @@ struct ExtractionService: Sendable {
                         let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
                         let (isSlate, conf) = await NativeVLMClient.shared.analyzeFrame(imagePath: thumbPath, tier: tier)
                         if isSlate {
-                            issuesFound.append(("slate", conf, "native_vlm_\(tier.rawValue)"))
+                            issuesFound.append(("slate", conf, tier.displayName))
                             videoIssueFound = true
                         }
                     }
@@ -558,6 +554,12 @@ struct ExtractionService: Sendable {
             if interval.1 == .infinity { return acc + 1.0 } else { return acc + (interval.1 - interval.0) } 
         }
         if !anyVideoFramesSaved && anySilenceLength == 0.0 && !hasStatic && !hasBuzzing && !hasClicking {
+            let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+            let isVlmReady = await MainActor.run {
+                if case .ready = NativeVLMClient.shared.state { return true }
+                return false
+            }
+            let defaultEngine = ExtractionService.determineDefaultEngine(isVlmReady: isVlmReady, tierName: tier.displayName)
             await StreamController.shared.insertVideoLog(
                 videoFilename: filename,
                 timestampSec: 0.0,
@@ -566,12 +568,16 @@ struct ExtractionService: Sendable {
                 nodeDest: "Distribution-Node",
                 issueType: "ok",
                 issueScore: 1.0,
-                analysisEngine: "avfoundation",
+                analysisEngine: defaultEngine,
                 thumbnailPath: nil
             )
         }
         
         await ExtractionProgress.shared.set(status: "completed", current: totalFramesCount, total: totalFramesCount, for: filename)
         appLogger.info("Extraction completed for \(filename)")
+    }
+    
+    static func determineDefaultEngine(isVlmReady: Bool, tierName: String) -> String {
+        return isVlmReady ? tierName : "opencv"
     }
 }

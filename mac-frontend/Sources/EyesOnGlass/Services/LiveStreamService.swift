@@ -2,6 +2,73 @@ import SwiftData
 import Foundation
 import CoreVideo
 import CoreImage
+import SwiftUI
+import SwiftUI
+import AppKit
+
+class UIVisualsRenderer: @unchecked Sendable {
+    static let shared = UIVisualsRenderer()
+    private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    private var isRenderingVideo = false
+    private let videoQueue = DispatchQueue(label: "com.eyesonGlass.uiVideoRenderer")
+    private var isRenderingAudio = false
+    private let audioQueue = DispatchQueue(label: "com.eyesonGlass.uiAudioRenderer")
+    
+    private var lastVideoRenderTime: TimeInterval = 0
+    private var lastAudioRenderTime: TimeInterval = 0
+
+    func render(pixelBuffer: CVPixelBuffer) {
+        videoQueue.async {
+            let now = CFAbsoluteTimeGetCurrent()
+            guard now - self.lastVideoRenderTime >= 1.0 / 30.0 else { return }
+            guard !self.isRenderingVideo else { return }
+            self.isRenderingVideo = true
+            
+            Task {
+                let isVisible = await MainActor.run { StreamController.shared.isAdvancedInspectorVisible }
+                if isVisible {
+                    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                    if let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                        let nsImage = NSImage(cgImage: cgImage, size: ciImage.extent.size)
+                        await MainActor.run {
+                            StreamController.shared.currentFrameImage = Image(nsImage: nsImage)
+                        }
+                    }
+                }
+                
+                self.videoQueue.async {
+                    self.lastVideoRenderTime = CFAbsoluteTimeGetCurrent()
+                    self.isRenderingVideo = false
+                }
+            }
+        }
+    }
+    
+    func render(waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+        audioQueue.async {
+            let now = CFAbsoluteTimeGetCurrent()
+            guard now - self.lastAudioRenderTime >= 1.0 / 30.0 else { return }
+            guard !self.isRenderingAudio else { return }
+            self.isRenderingAudio = true
+            
+            Task {
+                let isVisible = await MainActor.run { StreamController.shared.isAdvancedInspectorVisible }
+                if isVisible {
+                    await MainActor.run {
+                        StreamController.shared.audioWaveformData = waveform
+                        StreamController.shared.audioVectorscopeData = vectorscope
+                        StreamController.shared.audioPhaseData = phase
+                    }
+                }
+                
+                self.audioQueue.async {
+                    self.lastAudioRenderTime = CFAbsoluteTimeGetCurrent()
+                    self.isRenderingAudio = false
+                }
+            }
+        }
+    }
+}
 
 actor LiveStreamService {
     static let shared = LiveStreamService()
@@ -13,6 +80,20 @@ actor LiveStreamService {
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private var wasAudioHealthy: Bool? = nil
     private var activeSessionName: String?
+    
+    func getStreamInfo() async -> (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
+        if let ingestor = ingestor {
+            return await ingestor.streamInfo
+        }
+        return (nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil, nil)
+    }
+    
+    func getAudioVisuals() async -> (waveform: [Float], vectorscope: [CGPoint], phase: [Float])? {
+        if let ingestor = ingestor {
+            return await ingestor.audioVisuals
+        }
+        return nil
+    }
     
     func startMonitoring(uri: String, sessionName: String, ) async {
         if isActive {
@@ -35,6 +116,10 @@ actor LiveStreamService {
                 Task {
                     await self.processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
                 }
+            }, onVideoFrame: { pixelBuffer in
+                UIVisualsRenderer.shared.render(pixelBuffer: pixelBuffer)
+            }, onAudioVisuals: { waveform, vectorscope, phase in
+                UIVisualsRenderer.shared.render(waveform: waveform, vectorscope: vectorscope, phase: phase)
             }, onPacket: { count in
                 Task {
                     await ExtractionProgress.shared.setPackets(count, for: sessionName)
@@ -118,6 +203,10 @@ actor LiveStreamService {
         activeSessionName = nil
     }
     
+    func setMuted(_ muted: Bool) async {
+        await ingestor?.setMuted(muted)
+    }
+    
     private func processFrame(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, sessionName: String, thumbnailsDir: URL, ) async {
         guard isActive, sessionName == activeSessionName else { return }
         
@@ -175,7 +264,6 @@ actor LiveStreamService {
                 } else {
                     if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")); videoIssueFound = true }
                     if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")); videoIssueFound = true }
-                    if cv.isBlurry { issuesFound.append(("blur", 1.0, "opencv")); videoIssueFound = true }
                     let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
                     if macroConfidence >= 0.50 && cv.laplacianVariance > 30.0 {
                         issuesFound.append(("macroblocking", Double(macroConfidence), "opencv")); videoIssueFound = true
@@ -186,17 +274,22 @@ actor LiveStreamService {
                 }
             }
             
+            let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
             if !videoIssueFound && currentFrameIndex % 5 == 0 {
-                let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
                 let (isSlate, conf) = await NativeVLMClient.shared.analyzeFrame(imagePath: thumbURL.path, tier: tier)
                 if isSlate {
-                    issuesFound.append(("slate", conf, "native_vlm_\(tier.rawValue)"))
+                    issuesFound.append(("slate", conf, tier.displayName))
                     videoIssueFound = true
                 }
             }
             
             let now = Date().timeIntervalSince1970
             if issuesFound.isEmpty {
+                let isVlmReady = await MainActor.run {
+                    if case .ready = NativeVLMClient.shared.state { return true }
+                    return false
+                }
+                let defaultEngine = LiveStreamService.determineDefaultEngine(isVlmReady: isVlmReady, frameIndex: currentFrameIndex, tierName: tier.displayName)
                 await StreamController.shared.insertVideoLog(
                     videoFilename: sessionName,
                     timestampSec: Double(currentFrameIndex),
@@ -205,7 +298,7 @@ actor LiveStreamService {
                     nodeDest: "Distribution-Node",
                     issueType: "ok",
                     issueScore: 1.0,
-                    analysisEngine: "avfoundation",
+                    analysisEngine: defaultEngine,
                     thumbnailPath: nil
                 )
                 
@@ -232,5 +325,11 @@ actor LiveStreamService {
         } catch {
             appLogger.error("LiveStreamService: processing error: \(error, privacy: .public)")
         }
+    }
+    
+    // Removed updateVideoView and updateAudioView methods
+    
+    static func determineDefaultEngine(isVlmReady: Bool, frameIndex: Int, tierName: String) -> String {
+        return (isVlmReady && frameIndex % 5 == 0) ? tierName : "opencv"
     }
 }
