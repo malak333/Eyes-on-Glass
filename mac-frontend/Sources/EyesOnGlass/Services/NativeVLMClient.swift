@@ -1,6 +1,60 @@
 import Foundation
 import Observation
 import Hub
+import MLX
+import MLXLMCommon
+import MLXVLM
+import Tokenizers
+import CoreImage
+
+public struct EyesOnGlassTokenizerLoader: MLXLMCommon.TokenizerLoader {
+    public init() {}
+    public func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
+        let upstream = try await AutoTokenizer.from(modelFolder: directory)
+        return TokenizerBridge(upstream)
+    }
+}
+
+struct TokenizerBridge: MLXLMCommon.Tokenizer {
+    private let upstream: any Tokenizers.Tokenizer
+
+    init(_ upstream: any Tokenizers.Tokenizer) {
+        self.upstream = upstream
+    }
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        upstream.encode(text: text, addSpecialTokens: addSpecialTokens)
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        upstream.decode(tokens: tokenIds, skipSpecialTokens: skipSpecialTokens)
+    }
+
+    func convertTokenToId(_ token: String) -> Int? {
+        upstream.convertTokenToId(token)
+    }
+
+    func convertIdToToken(_ id: Int) -> String? {
+        upstream.convertIdToToken(id)
+    }
+
+    var bosToken: String? { upstream.bosToken }
+    var eosToken: String? { upstream.eosToken }
+    var unknownToken: String? { upstream.unknownToken }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        do {
+            return try upstream.applyChatTemplate(
+                messages: messages, tools: tools, additionalContext: additionalContext)
+        } catch Tokenizers.TokenizerError.missingChatTemplate {
+            throw MLXLMCommon.TokenizerError.missingChatTemplate
+        }
+    }
+}
 
 public enum GemmaModelTier: String, CaseIterable, Identifiable {
     case e2b = "Google/gemma-4-e2b-mlx-4bit"
@@ -36,6 +90,7 @@ public final class NativeVLMClient {
     @MainActor public var selectedTier: GemmaModelTier = .e2b
     
     private let isolationQueue = DispatchQueue(label: "com.eyeson.vlm.inference", qos: .userInitiated)
+    private var modelContainer: ModelContainer?
     
     private init() {}
     
@@ -68,23 +123,19 @@ public final class NativeVLMClient {
             let hub = HubApi(hfToken: token?.isEmpty == false ? token : nil)
             let repo = Hub.Repo(id: tier.rawValue)
             
-            // Mocking download progress since HubApi.snapshot is async without progress block natively in basic swift-hub wrapper
-            self.state = .downloading(progress: 0.1)
-            try await Task.sleep(nanoseconds: 500_000_000)
-            self.state = .downloading(progress: 0.5)
-            try await Task.sleep(nanoseconds: 500_000_000)
-            self.state = .downloading(progress: 1.0)
-            
             // In reality, we'd use the snapshot endpoint
-            // let modelDir = try await hub.snapshot(from: repo)
-            // For this mock implementation, we bypass the actual Hugging Face download to prevent 
-            // 'File not found' errors on placeholder repositories.
+            let modelDir = try await hub.snapshot(from: repo) { progress in
+                Task { @MainActor in
+                    self.state = .downloading(progress: progress.fractionCompleted)
+                }
+            }
             
             self.state = .loadingToMemory
             
-            // Here we would load into MLX matrices
-            // e.g. let (model, tokenizer) = try loadModel(modelDir)
-            try await Task.sleep(nanoseconds: 1_000_000_000)
+            self.modelContainer = try await VLMModelFactory.shared.loadContainer(
+                from: modelDir,
+                using: EyesOnGlassTokenizerLoader()
+            )
             
             self.state = .ready
         } catch {
@@ -103,17 +154,39 @@ public final class NativeVLMClient {
             return (false, 0.0) 
         }
         
-        return await withCheckedContinuation { continuation in
-            isolationQueue.async {
-                // Mock native MLX generation
-                // The actual prompt requirement: "Does this frame appear to be a static slate or holding screen? Reply exclusively in valid JSON with keys 'is_slate' (boolean) and 'confidence' (float between 0.0 and 1.0). No other text."
-                // Since Native VLM generation requires thousands of lines of Transformer math, returning structured mock block
-                
-                // Pretend MLX evaluation took ~200ms
-                Thread.sleep(forTimeInterval: 0.2)
-                
-                continuation.resume(returning: (false, 0.0))
+        
+        guard let url = URL(string: imagePath), let ciImage = CIImage(contentsOf: url), let container = self.modelContainer else {
+            return (false, 0.0)
+        }
+        
+        let prompt = "Does this frame appear to be a static slate or holding screen? Reply exclusively in valid JSON with keys 'is_slate' (boolean) and 'confidence' (float between 0.0 and 1.0). No other text."
+        
+        do {
+            let userInput = UserInput(prompt: prompt, images: [.ciImage(ciImage)])
+            let input = try await container.prepare(input: userInput)
+            let stream = try await container.generate(
+                input: input,
+                parameters: GenerateParameters(temperature: 0.0)
+            )
+            
+            var outputText = ""
+            for try await event in stream {
+                if case .chunk(let text) = event {
+                    outputText += text
+                }
             }
+            
+            guard let data = outputText.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return (false, 0.0)
+            }
+            
+            let isSlate = json["is_slate"] as? Bool ?? false
+            let confidence = json["confidence"] as? Double ?? 0.0
+            return (isSlate, confidence)
+        } catch {
+            print("Frame inference failed: \(error)")
+            return (false, 0.0)
         }
     }
 }

@@ -283,6 +283,14 @@ struct StreamStatsSectionView: View {
             LabeledContent("CC Errors (Total)", value: "\(streamController.totalCCErrors)")
                 .monospacedDigit()
             
+            Button(action: {
+                streamController.clearCCErrors()
+            }) {
+                Text("Clear CC Errors")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            
             LabeledContent("Frames Analyzed", value: "\(logs.count)")
                 .monospacedDigit()
             

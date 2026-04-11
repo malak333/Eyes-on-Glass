@@ -1,5 +1,5 @@
 {
-  "originHash" : "d353c99fb17a7cc37d574345d101976b8d04a0a6642ca616ea19082a118a9f77",
+  "originHash" : "23bd616cac806b9e98ab89d50ff6e783b7ec8d43cb4edb8b7866d2ca78f0be7a",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "61b9e011e09a62b489f6bd647958f1555bdf2896",
         "version" : "0.31.3"
+      }
+    },
+    {
+      "identity" : "mlx-swift-lm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ml-explore/mlx-swift-lm",
+      "state" : {
+        "branch" : "main",
+        "revision" : "7f169f9587b9fc41a506f092a4ec4d69367e4ed5"
       }
     },
     {
@@ -89,6 +98,15 @@
       "state" : {
         "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
         "version" : "1.1.1"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "0687f71944021d616d34d922343dcef086855920",
+        "version" : "600.0.1"
       }
     },
     {

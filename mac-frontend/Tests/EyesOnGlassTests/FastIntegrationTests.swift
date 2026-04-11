@@ -10,7 +10,7 @@ final class FastIntegrationTests: XCTestCase {
         
         func decoder(_ decoder: AudioDecoder, didDecodeHealth health: AudioHealth, pts: Int64) { }
         
-        func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+        func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
             visualCount += 1
             let active = waveform.filter({ abs($0) > 0.0001 }).count
             if active > 0 {
@@ -20,7 +20,7 @@ final class FastIntegrationTests: XCTestCase {
     }
     
     func testFileParsing() {
-        let path = "/Users/michaelnobile/Antigravity/Eyes-on-Glass/backend/uploads/wpvi-capture.ts"
+        let path = "/Users/michaelnobile/Video Assets/kabc-20MB.ts"
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             XCTFail("Could not read file")
             return
@@ -61,8 +61,9 @@ final class FastIntegrationTests: XCTestCase {
         Active waveforms: \(mockBridge.activeWaveformCount)
         =====================================
         """
-        print(logOut) // Will only print if running inside Xcode or if test fails occasionally without formatting
+        print(logOut)
         
+
         XCTAssertTrue(mockBridge.visualCount > 0, "No visuals received!")
         
         XCTAssertGreaterThan(payloadCount, 0, "No payload parsed from TS")

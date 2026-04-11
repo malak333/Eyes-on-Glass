@@ -9,7 +9,7 @@ public enum AudioHealth {
 
 public protocol AudioDecoderDelegate: AnyObject {
     func decoder(_ decoder: AudioDecoder, didDecodeHealth health: AudioHealth, pts: Int64)
-    func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float])
+    func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float])
 }
 
 public class AudioDecoder {
@@ -148,14 +148,15 @@ public class AudioDecoder {
             }
             
             // AC-3
-            if b0 == 0x0B && b1 == 0x77 {
+            if b0 == 0x0B && b1 == 0x77 && offset + 6 < payload.count {
                 self.audioCodec = "AC-3"
                 let fscod = Int((payload[offset+4] & 0xC0) >> 6)
                 let ac3SampleRates = [48000, 44100, 32000, 48000]
                 self.sampleRate = ac3SampleRates[fscod]
                 
-                let acmod = Int((payload[offset+4] & 0x38) >> 3)
+                let acmod = Int((payload[offset+6] & 0xE0) >> 5)
                 self.channels = (acmod == 1) ? 1 : ((acmod == 2) ? 2 : 6)
+                print("AC-3 detected! fscod=\(fscod), acmod=\(acmod), calculated channels=\(self.channels!)")
                 return offset
             }
         }
@@ -213,13 +214,24 @@ public class AudioDecoder {
             inFormat = AVAudioFormat(streamDescription: &asbd)
         }
         
-        guard let validInFormat = inFormat else { return }
+        guard let validInFormat = inFormat else {
+            print("AudioDecoder: FAILED to create inFormat for \(codec)")
+            return
+        }
         
         let outCh = UInt32(ch == 1 ? 1 : 2)
-        guard let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr), channels: outCh, interleaved: false) else { return }
+        guard let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sr), channels: outCh, interleaved: false) else {
+            print("AudioDecoder: FAILED to create outFormat")
+            return
+        }
         
         self.outFormat = outFormat
         self.converter = AVAudioConverter(from: validInFormat, to: outFormat)
+        
+        if self.converter == nil {
+            print("AudioDecoder: AVAudioConverter failed to instantiate with inFormat: \(validInFormat) outFormat: \(outFormat)")
+            return
+        }
         
         if codec == "AAC" {
             let freqIndex = sampleFrequencies.firstIndex(of: sr) ?? 4
@@ -246,6 +258,19 @@ public class AudioDecoder {
         self.isConfigured = true
     }
     
+    let ac3FrameSizes: [[Int]] = [
+        [ 64,  69,  96], [ 64,  70,  96], [ 80,  87, 120], [ 80,  88, 120],
+        [ 96, 104, 144], [ 96, 105, 144], [112, 121, 168], [112, 122, 168],
+        [128, 139, 192], [128, 140, 192], [160, 174, 240], [160, 175, 240],
+        [192, 208, 288], [192, 209, 288], [224, 243, 336], [224, 244, 336],
+        [256, 278, 384], [256, 279, 384], [320, 348, 480], [320, 349, 480],
+        [384, 417, 576], [384, 418, 576], [448, 487, 672], [448, 488, 672],
+        [512, 557, 768], [512, 558, 768], [640, 696, 960], [640, 697, 960],
+        [768, 835, 1152],[768, 836, 1152],[896, 975, 1344],[896, 976, 1344],
+        [1024,1114, 1536],[1024,1115, 1536],[1152,1253, 1728],[1152,1254, 1728],
+        [1280,1393, 1920],[1280,1394, 1920]
+    ]
+
     private func processAudioFrame(payload: Data) {
         guard let converter = converter, let outFormat = outFormat, let codec = audioCodec else { return }
         
@@ -304,20 +329,27 @@ public class AudioDecoder {
                 }
             } else if codec == "AC-3" {
                 if b0 == 0x0B && b1 == 0x77 {
-                    var nextSync = offset + 2
-                    while nextSync < audioResidue.count - 1 {
-                        if audioResidue[nextSync] == 0x0B && audioResidue[nextSync+1] == 0x77 {
-                            break
+                    let fscod = Int((audioResidue[offset+4] & 0xC0) >> 6)
+                    let frmsizecod = Int(audioResidue[offset+4] & 0x3F)
+                    
+                    if fscod < 3 && frmsizecod < 38 {
+                        let expectedFrameLength = ac3FrameSizes[frmsizecod][fscod] * 2
+                        
+                        if offset + expectedFrameLength > audioResidue.count {
+                            lastValidOffset = offset
+                            break // Wait for more data
+                        } else if offset + expectedFrameLength == audioResidue.count {
+                            frameLength = expectedFrameLength
+                        } else {
+                            // Check next frame header for strict validation
+                            let nb0 = audioResidue[offset + expectedFrameLength]
+                            let nb1 = audioResidue[offset + expectedFrameLength + 1]
+                            
+                            if nb0 == 0x0B && nb1 == 0x77 {
+                                frameLength = expectedFrameLength
+                            }
                         }
-                        nextSync += 1
                     }
-                    if nextSync == audioResidue.count - 1 {
-                        lastValidOffset = offset
-                        break // Wait for more data
-                    } else {
-                        frameLength = nextSync - offset
-                    }
-                    packetCount = 1
                 }
             }
             
@@ -381,10 +413,10 @@ public class AudioDecoder {
             
             let status = converter.convert(to: pcmBuffer, error: &error, withInputFrom: inputBlock)
             
-            if status == .haveData || status == .endOfStream {
+            if status == .haveData || status == .endOfStream || status == .inputRanDry {
                 if pcmBuffer.frameLength > 0 {
                     if let arrays = extractVisuals(from: pcmBuffer) {
-                        delegate?.decoder(self, didDecodeVisuals: arrays.0, vectorscope: arrays.1, phase: arrays.2)
+                        delegate?.decoder(self, didDecodeVisuals: arrays.0, vectorscope: arrays.1, phase: arrays.2, levels: arrays.3)
                     }
                     self.playerNode.scheduleBuffer(pcmBuffer)
                 }
@@ -395,7 +427,7 @@ public class AudioDecoder {
         }
     }
     
-    internal func extractVisuals(from pcmBuffer: AVAudioPCMBuffer) -> ([Float], [CGPoint], [Float])? {
+    internal func extractVisuals(from pcmBuffer: AVAudioPCMBuffer) -> ([Float], [CGPoint], [Float], [Float])? {
         guard let floatChannelData = pcmBuffer.floatChannelData else { return nil }
         let frameLength = Int(pcmBuffer.frameLength)
         guard frameLength > 0 else { return nil }
@@ -452,6 +484,18 @@ public class AudioDecoder {
         let peak = max(peakL, peakR)
         self.truePeak = Double(20 * log10(max(peak, 1e-6)))
         
+        // Audio Bars: Peak extraction per channel
+        var levels: [Float] = []
+        let actualChannelsCount = min(channels, Int(pcmBuffer.format.channelCount))
+        for c in 0..<actualChannelsCount {
+            var maxV: Float = 0
+            var minV: Float = 0
+            vDSP_maxv(floatChannelData[c], 1, &maxV, vDSP_Length(frameLength))
+            vDSP_minv(floatChannelData[c], 1, &minV, vDSP_Length(frameLength))
+            let chPeak = max(abs(maxV), abs(minV))
+            levels.append(chPeak)
+        }
+        
         var rmsL: Float = 0
         vDSP_rmsqv(leftChannel, 1, &rmsL, vDSP_Length(frameLength))
         
@@ -484,6 +528,6 @@ public class AudioDecoder {
         self.phaseHistory.append(correlation)
         if self.phaseHistory.count > 100 { self.phaseHistory.removeFirst() }
         
-        return (waveform, vectorscope, self.phaseHistory)
+        return (waveform, vectorscope, self.phaseHistory, levels)
     }
 }

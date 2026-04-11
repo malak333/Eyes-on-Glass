@@ -21,7 +21,7 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
    - The former Vapor engine is now completely decoupled. The platform receives A/V payloads completely autonomously natively bypassing network abstraction bottlenecks.
    - Delegates local processing to **AVFoundation/AVAssetReader**, carving out frames directly into memory, dramatically outscaling sub-process FFmpeg extraction speeds.
    - **Live Multicast Integration (`LiveStreamService`)**: A dedicated concurrent actor natively ingests infinite UDP streams using low-level **BSD Sockets**. Processing leverages a multi-track parsing engine (`TSDemuxer`) extracting and locking onto both Audio and Video payloads simultaneously along with exact 33-bit Presentation Time Stamps (PTS). The Video track executes zero-copy hardware decoding via Apple Silicon's native VideoToolbox (`H264Decoder`).
-   - **Real-Time Audio Telemetry**: The audio stream is actively monitored via continuous payload analysis (supporting ADTS AAC, MP2, MP3, and AC-3 codecs). `AVAudioConverter` transforms incoming audio packets into `Float32` linear PCM, which is immediately handed to Apple's **Accelerate** (vDSP) framework to run zero-latency Fast Fourier Transforms (FFTs) and Phase Correlation computations. These signals are piped dynamically to SwiftUI canvases to render real-time Waveforms, Vectorscopes, and Audio Phase arrays at 30 fps.
+   - **Real-Time Audio Telemetry**: The audio stream is actively monitored via continuous payload analysis (supporting ADTS AAC, MP2, MP3, and AC-3 codecs). AC-3 payload framing is rigorously mapped using static **ATSC A/52 standard guidelines** to prevent native buffer drops. `AVAudioConverter` transforms incoming audio packets into `Float32` linear PCM, which is immediately handed to Apple's **Accelerate** (vDSP) framework. This runs zero-latency Fast Fourier Transforms (FFTs), Phase Correlation computations, and per-channel true peak extraction. These signals are piped dynamically to front-end SwiftUI canvases to render real-time Waveforms, Vectorscopes, Audio Phase arrays, and multi-channel Audio Peak Bars (incorporating UI-driven peak-hold decay) at 30 fps.
 
 3. **Analysis Engine (`mlx-swift` & Gemma 4)**:
    - Streams frames concurrently via standard Swift `Actor` execution loops. Math matrix routines executed natively via `vImage` and `Accelerate` check for laplacian threshold differences replacing heavyweight external dependencies.
@@ -60,7 +60,19 @@ You do not need an Xcode project (`.xcodeproj`) file! Modern Xcode securely comp
 
 The glassmorphic macOS application will appear instantly, granting you access to initialize the `LiveStreamService` natively over `UDP`.
 
-### 3. Packaging the Application for Distribution
+### 3. Automated Validation Framework (CLI Battery Test)
+
+In accordance with our Code-Style Guidelines (Autonomous Execution, Testing, and Quality Standards), the project features a fully decoupled, headless `Executable` testing harness designed to ingest raw streams and perform asynchronous MLX-VLM inferences iteratively against actual MLX Gemma model weights. 
+
+To execute the multi-model validation engine against the `.e2b`, `.e4b`, and `.b26` MLX architectures locally, supply your Hugging Face Authentication Token as an environment variable to securely fetch tensors from the Hub:
+```bash
+cd mac-frontend
+swift build
+ANALYSIS_CLI=true HF_TOKEN="your_huggingface_read_token" ./.build/debug/EyesOnGlass --cli
+```
+*(This directly pipes all telemetry and VLM output payload evaluations into a standalone `analysis_results.json` log for review. Make sure you have at least 16GB of Unified Memory free before validating the `b26` MoE architecture).*
+
+### 4. Packaging the Application for Distribution
 
 Because `Package.swift` builds a raw executable, Xcode's standard **Product > Archive** framework is disabled. If you want to bundle the application into a properly structured macOS `.app` bundle, use the included packaging scripts:
 

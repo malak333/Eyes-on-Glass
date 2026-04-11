@@ -123,17 +123,34 @@ struct AdvancedInspectorView: View {
             HStack(spacing: 16) {
                 // Waveform
                 VisualizerBox(title: "Waveform") {
-                    realWaveform()
+                    ZStack {
+                        VerticalScaleOverlay(topLabel: "+1.0", bottomLabel: "-1.0")
+                        realWaveform()
+                    }
                 }
                 
                 // Histogram / Spectrum
                 VisualizerBox(title: "Spectrum") {
-                    realAudioPhase()
+                    ZStack {
+                        VerticalScaleOverlay(topLabel: "IN (+1)", bottomLabel: "OUT (-1)")
+                        realAudioPhase()
+                    }
                 }
                 
                 // Vectorscope
                 VisualizerBox(title: "Vectorscope") {
-                    realVectorscope()
+                    ZStack {
+                        VectorscopeGridOverlay()
+                        realVectorscope()
+                    }
+                }
+                
+                // Audio Bars
+                VisualizerBox(title: "Audio Levels") {
+                    ZStack {
+                        AudioDecibelGridOverlay()
+                        AudioBarsView(audioLevels: streamController.audioLevelsData)
+                    }
                 }
             }
             .padding(.horizontal)
@@ -189,34 +206,24 @@ struct AdvancedInspectorView: View {
     @ViewBuilder
     private func realVectorscope() -> some View {
         let data = streamController.audioVectorscopeData
-        ZStack {
-            Circle()
-                .strokeBorder(Color.gray.opacity(0.3), lineWidth: 1)
-                .frame(width: 140, height: 140)
+        Canvas { context, size in
+            if data.isEmpty { return }
             
-            // Crosshairs
-            Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 140, height: 1)
-            Rectangle().fill(Color.gray.opacity(0.3)).frame(width: 1, height: 140)
+            var path = Path()
+            let scale = min(size.width, size.height) / 2.0
             
-            Canvas { context, size in
-                if data.isEmpty { return }
+            for (i, pt) in data.enumerated() {
+                // pt.x is left, pt.y is right. Rotate by 45 deg to standard lissajous
+                let x = size.width/2 + Double(pt.y - pt.x) * 0.707 * scale
+                let y = size.height/2 - Double(pt.x + pt.y) * 0.707 * scale
                 
-                var path = Path()
-                let scale = size.width / 2.0
-                
-                for (i, pt) in data.enumerated() {
-                    // pt.x is left, pt.y is right. Rotate by 45 deg to standard lissajous
-                    let x = size.width/2 + Double(pt.y - pt.x) * 0.707 * scale
-                    let y = size.height/2 - Double(pt.x + pt.y) * 0.707 * scale
-                    
-                    if i == 0 {
-                        path.move(to: CGPoint(x: x, y: y))
-                    } else {
-                        path.addLine(to: CGPoint(x: x, y: y))
-                    }
+                if i == 0 {
+                    path.move(to: CGPoint(x: x, y: y))
+                } else {
+                    path.addLine(to: CGPoint(x: x, y: y))
                 }
-                context.stroke(path, with: .color(.green.opacity(0.8)), lineWidth: 1)
             }
+            context.stroke(path, with: .color(.green.opacity(0.8)), lineWidth: 1)
         }
     }
     
@@ -318,5 +325,102 @@ struct VisualizerBox<Content: View>: View {
         }
         .background(Color(NSColor.darkGray).opacity(0.2))
         .border(Color(NSColor.darkGray), width: 1)
+    }
+}
+
+// MARK: - Analyzer Grids
+
+struct VerticalScaleOverlay: View {
+    let topLabel: String
+    let bottomLabel: String
+    
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            
+            ZStack(alignment: .topLeading) {
+                // Top line
+                Path { p in p.move(to: CGPoint(x: 0, y: 1)); p.addLine(to: CGPoint(x: w, y: 1)) }
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                Text(topLabel)
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.gray.opacity(0.8))
+                    .position(x: 30, y: 8)
+                
+                // Center line
+                Path { p in p.move(to: CGPoint(x: 0, y: h/2)); p.addLine(to: CGPoint(x: w, y: h/2)) }
+                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                Text("0.0")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.gray.opacity(0.8))
+                    .position(x: 18, y: h/2 - 6)
+                
+                // Bottom line
+                Path { p in p.move(to: CGPoint(x: 0, y: h - 1)); p.addLine(to: CGPoint(x: w, y: h - 1)) }
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                Text(bottomLabel)
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.gray.opacity(0.8))
+                    .position(x: 30, y: h - 6)
+            }
+        }
+    }
+}
+
+struct AudioDecibelGridOverlay: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let maxH = geo.size.height - 15
+            
+            ZStack(alignment: .topLeading) {
+                ForEach(0..<7, id: \.self) { i in
+                    let db = -i * 10
+                    let levelFrac = CGFloat(60 + db) / 60.0
+                    let y = maxH - (maxH * levelFrac)
+                    
+                    Path { p in p.move(to: CGPoint(x: 0, y: max(0, min(maxH, y)))); p.addLine(to: CGPoint(x: w, y: max(0, min(maxH, y)))) }
+                        .stroke(db == 0 ? Color.white.opacity(0.3) : Color.white.opacity(0.1), lineWidth: 1)
+                    
+                    Text("\(db)")
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundColor(.gray.opacity(0.8))
+                        .position(x: 12, y: y > 10 ? y - 6 : y + 6)
+                }
+            }
+        }
+    }
+}
+
+struct VectorscopeGridOverlay: View {
+    var body: some View {
+        GeometryReader { geo in
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let radius = min(geo.size.width, geo.size.height) / 2.0
+            
+            ZStack {
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+                    .frame(width: radius * 2, height: radius * 2)
+                    .position(center)
+                
+                Path { p in p.move(to: CGPoint(x: center.x - radius, y: center.y)); p.addLine(to: CGPoint(x: center.x + radius, y: center.y)) }
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                
+                Path { p in p.move(to: CGPoint(x: center.x, y: center.y - radius)); p.addLine(to: CGPoint(x: center.x, y: center.y + radius)) }
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                
+                Text("+L")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.gray.opacity(0.8))
+                    .position(x: center.x - radius + 15, y: center.y - radius + 15)
+                
+                Text("+R")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.gray.opacity(0.8))
+                    .position(x: center.x + radius - 15, y: center.y - radius + 15)
+            }
+        }
     }
 }

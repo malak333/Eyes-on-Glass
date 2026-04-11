@@ -1,0 +1,45 @@
+Building for debugging...
+[0/5] Write sources
+[1/5] Write swift-version--58304C5D6DBC2206.txt
+error: emit-module command failed with exit code 1 (use -v to see invocation)
+[3/7] Emitting module EyesOnGlass
+/Users/michaelnobile/Antigravity/Eyes-on-Glass/mac-frontend/Sources/EyesOnGlass/Services/ExtractionService.swift:571:28: error: no exact matches in call to instance method 'append'
+569 |             // Wait for completion and submit remainder
+570 |             for await (_, newLogs) in group {
+571 |                 logsToSave.append(contentsOf: newLogs)
+    |                            `- error: no exact matches in call to instance method 'append'
+572 |                 completedCount += 1
+573 |                 await ExtractionProgress.shared.set(status: "analyzing", current: completedCount, total: finalFrames.count, for: filename)
+
+Swift.Array.append:2:33: note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Element' == 'S.Element')
+1 | generic struct Array {
+2 | @inlinable public mutating func append<S>(contentsOf newElements: __owned S) where Element == S.Element, S : Sequence}
+  |                                 `- note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Element' == 'S.Element')
+3 | 
+
+Swift.RangeReplaceableCollection.append:2:33: note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Self.Element' == 'S.Element')
+1 | protocol RangeReplaceableCollection {
+2 | @inlinable public mutating func append<S>(contentsOf newElements: __owned S) where S : Sequence, Self.Element == S.Element}
+  |                                 `- note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Self.Element' == 'S.Element')
+3 | 
+[4/7] Compiling EyesOnGlass ExtractionService.swift
+/Users/michaelnobile/Antigravity/Eyes-on-Glass/mac-frontend/Sources/EyesOnGlass/Services/ExtractionService.swift:571:28: error: no exact matches in call to instance method 'append'
+569 |             // Wait for completion and submit remainder
+570 |             for await (_, newLogs) in group {
+571 |                 logsToSave.append(contentsOf: newLogs)
+    |                            `- error: no exact matches in call to instance method 'append'
+572 |                 completedCount += 1
+573 |                 await ExtractionProgress.shared.set(status: "analyzing", current: completedCount, total: finalFrames.count, for: filename)
+
+Swift.Array.append:2:33: note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Element' == 'S.Element')
+1 | generic struct Array {
+2 | @inlinable public mutating func append<S>(contentsOf newElements: __owned S) where Element == S.Element, S : Sequence}
+  |                                 `- note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Element' == 'S.Element')
+3 | 
+
+Swift.RangeReplaceableCollection.append:2:33: note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Self.Element' == 'S.Element')
+1 | protocol RangeReplaceableCollection {
+2 | @inlinable public mutating func append<S>(contentsOf newElements: __owned S) where S : Sequence, Self.Element == S.Element}
+  |                                 `- note: candidate requires that the types 'TempVideoLog' and 'VideoLog' be equivalent (requirement specified as 'Self.Element' == 'S.Element')
+3 | 
+error: fatalError

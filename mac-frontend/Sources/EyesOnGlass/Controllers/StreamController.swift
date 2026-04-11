@@ -65,6 +65,7 @@ final class StreamController {
     var audioWaveformData: [Float] = []
     var audioVectorscopeData: [CGPoint] = []
     var audioPhaseData: [Float] = []
+    var audioLevelsData: [Float] = []
     
     var isAdvancedInspectorVisible: Bool = false
     var isVBR: Bool = false
@@ -265,6 +266,7 @@ final class StreamController {
         self.audioWaveformData = []
         self.audioVectorscopeData = []
         self.audioPhaseData = []
+        self.audioLevelsData = []
     }
     
 
@@ -273,6 +275,12 @@ final class StreamController {
     func incrementCCErrors() {
         self.streamCCErrors += 1
         self.totalCCErrors += 1
+    }
+    
+    @MainActor
+    func clearCCErrors() {
+        self.streamCCErrors = 0
+        self.totalCCErrors = 0
     }
 
     @MainActor

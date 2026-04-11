@@ -38,13 +38,15 @@ final class UIVisualsRendererTests: XCTestCase {
         StreamController.shared.audioWaveformData = []
         StreamController.shared.audioVectorscopeData = []
         StreamController.shared.audioPhaseData = []
+        StreamController.shared.audioLevelsData = []
         
         let dummyWaveform: [Float] = [0.1, 0.2, 0.3]
         let dummyVectorscope: [CGPoint] = [CGPoint(x: 1, y: 1)]
         let dummyPhase: [Float] = [0.5, 0.6]
+        let dummyLevels: [Float] = [1.0, 0.8]
         
         // Render first frame
-        renderer.render(waveform: dummyWaveform, vectorscope: dummyVectorscope, phase: dummyPhase)
+        renderer.render(waveform: dummyWaveform, vectorscope: dummyVectorscope, phase: dummyPhase, levels: dummyLevels)
         
         // Yield to allow async queue dispatches to process
         try await Task.sleep(nanoseconds: 50_000_000) 
@@ -52,6 +54,7 @@ final class UIVisualsRendererTests: XCTestCase {
         XCTAssertEqual(StreamController.shared.audioWaveformData, dummyWaveform)
         XCTAssertEqual(StreamController.shared.audioVectorscopeData, dummyVectorscope)
         XCTAssertEqual(StreamController.shared.audioPhaseData, dummyPhase)
+        XCTAssertEqual(StreamController.shared.audioLevelsData, dummyLevels)
         
         StreamController.shared.isAdvancedInspectorVisible = false
     }

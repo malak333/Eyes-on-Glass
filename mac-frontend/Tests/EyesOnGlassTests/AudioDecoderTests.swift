@@ -12,7 +12,7 @@ final class AudioDecoderTests: XCTestCase {
             observedHealth = health
         }
         
-        func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+        func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
             observedWaveform = waveform
         }
     }
@@ -80,6 +80,25 @@ final class AudioDecoderTests: XCTestCase {
         // For testing we just ensure that the parsing didn't lead to infinite loop
         XCTAssertEqual(decoder.audioCodec, "MP2")
     }
+
+    func testAudioDecoderAC3HeaderParsing() {
+        let decoder = AudioDecoder()
+        
+        // Construct a mock AC-3 header
+        // b0=0x0B, b1=0x77
+        // crc1=0x00, 0x00
+        // byte 4: fscod=0 (48kHz) -> 0b00, frmsizecod=20 (192kbps) -> 0b010100. Combined: 0b00010100 (0x14)
+        // byte 5: bsid/bsmod (ignored) -> 0x00
+        // byte 6: acmod=2 (stereo) -> 0b010, rest ignored -> 0b01000000 (0x40)
+        let mockAC3: [UInt8] = [0x0B, 0x77, 0x00, 0x00, 0x14, 0x00, 0x40, 0x00, 0x00, 0x00]
+        
+        decoder.decode(audioPayload: Data(mockAC3), pts: 0)
+        
+        XCTAssertEqual(decoder.audioCodec, "AC-3")
+        XCTAssertEqual(decoder.sampleRate, 48000)
+        XCTAssertEqual(decoder.channels, 2, "Stereo AC-3 should be resolved dynamically from acmod = 2")
+    }
+
 
     func testAudioDecoderMultiChannelConfiguration() {
         let decoder = AudioDecoder()
@@ -171,6 +190,9 @@ final class AudioDecoderTests: XCTestCase {
         if let visuals = decoder.extractVisuals(from: buffer) {
             let phase = visuals.2.last ?? 0
             XCTAssertEqual(phase, 1.0, accuracy: 0.01, "Perfectly correlated phase should be ~1.0")
+            XCTAssertEqual(visuals.3.count, 2, "Levels array should have 2 channels")
+            XCTAssertEqual(visuals.3[0], 1.0, accuracy: 0.01, "Peak should be ~1.0")
+            XCTAssertEqual(visuals.3[1], 1.0, accuracy: 0.01, "Peak should be ~1.0")
         } else {
             XCTFail("Failed to extract visuals")
         }
@@ -185,6 +207,8 @@ final class AudioDecoderTests: XCTestCase {
         if let visuals = decoder.extractVisuals(from: buffer) {
             let phase = visuals.2.last ?? 0
             XCTAssertEqual(phase, -1.0, accuracy: 0.01, "Perfectly anti-correlated phase should be ~-1.0")
+            XCTAssertEqual(visuals.3[0], 1.0, accuracy: 0.01, "Peak should be ~1.0")
+            XCTAssertEqual(visuals.3[1], 1.0, accuracy: 0.01, "Peak should be ~1.0")
         } else {
             XCTFail("Failed to extract visuals")
         }

@@ -27,7 +27,7 @@ final class UDPIngestorTests: XCTestCase {
                 XCTAssertEqual(CVPixelBufferGetWidth(pb), CVPixelBufferGetWidth(dummyPixelBuffer))
                 expectation.fulfill()
             },
-            onAudioVisuals: { _, _, _ in },
+            onAudioVisuals: { _, _, _, _ in },
             onPacket: { _ in }
         )
         

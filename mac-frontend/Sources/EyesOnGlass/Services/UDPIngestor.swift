@@ -20,7 +20,7 @@ public actor UDPIngestor {
     
     // Callback for LiveStreamService
     private var onFrameCallback: ((CVPixelBuffer, AudioHealth) -> Void)?
-    private var onAudioVisualsCallback: (([Float], [CGPoint], [Float]) -> Void)?
+    private var onAudioVisualsCallback: (([Float], [CGPoint], [Float], [Float]) -> Void)?
     private var onPacketCallback: ((Int) -> Void)?
     private var bridge: IngestorBridge?
     private var packetCount: Int = 0
@@ -37,13 +37,14 @@ public actor UDPIngestor {
     private var audioWaveform: [Float] = []
     private var audioVectorscope: [CGPoint] = []
     private var audioPhase: [Float] = []
+    private var audioLevels: [Float] = []
     
     public var streamInfo: (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
         return (demuxer.currentVideoPID, demuxer.currentAudioPID, videoDecoder.videoSize, audioDecoder.sampleRate, audioDecoder.channels, audioDecoder.audioCodec, audioDecoder.audioBitrate, audioDecoder.loudness, audioDecoder.truePeak, audioDecoder.dialNorm, demuxer.currentTsID, demuxer.currentProgramID, demuxer.currentServicesCount, demuxer.currentSdtChannel, demuxer.currentSdtProvider, videoDecoder.videoColor, videoDecoder.gopSize, videoDecoder.frameRate, demuxer.currentTsClock, demuxer.currentPcrJitter, demuxer.currentPcrInterval)
     }
     
-    public var audioVisuals: (waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
-        return (audioWaveform, audioVectorscope, audioPhase)
+    public var audioVisuals: (waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
+        return (audioWaveform, audioVectorscope, audioPhase, audioLevels)
     }
     
     public init() {}
@@ -52,7 +53,7 @@ public actor UDPIngestor {
         uri: String, 
         onFrame: @escaping (CVPixelBuffer, AudioHealth) -> Void, 
         onVideoFrame: @escaping (CVPixelBuffer) -> Void,
-        onAudioVisuals: @escaping ([Float], [CGPoint], [Float]) -> Void,
+        onAudioVisuals: @escaping ([Float], [CGPoint], [Float], [Float]) -> Void,
         onPacket: @escaping (Int) -> Void,
         onCCError: @escaping () -> Void = {},
         onStreamLost: @escaping () -> Void = {},
@@ -147,6 +148,11 @@ public actor UDPIngestor {
     }
     
     private func connect(uri: String) async {
+        if uri.hasPrefix("file://") {
+            await connectToFile(uri: uri)
+            return
+        }
+        
         guard let (isMulticast, host, port) = parseURI(uri) else {
             print("UDPIngestor: Invalid URI \(uri)")
             return
@@ -229,6 +235,45 @@ public actor UDPIngestor {
         self.readSource = source
     }
     
+    private func connectToFile(uri: String) async {
+        guard let url = URL(string: uri) else { return }
+        print("UDPIngestor: Reading local offline file \\(uri)")
+        
+        self.lastPacketTime = Date().timeIntervalSince1970
+        self.lastVideoTime = Date().timeIntervalSince1970
+        let continuation = self.streamContinuation
+        
+        Task.detached(priority: .userInitiated) {
+            guard let fileHandle = try? FileHandle(forReadingFrom: url) else {
+                print("UDPIngestor: Failed to read file")
+                return
+            }
+            defer { try? fileHandle.close() }
+            
+            let chunkSize = 65536
+            var keepReading = true
+            while keepReading {
+                if Task.isCancelled { break }
+                autoreleasepool {
+                    let data = fileHandle.readData(ofLength: chunkSize)
+                    if data.count > 0 {
+                        Task { @MainActor in
+                            // Note: continuation belongs to actor, yielding is fine conceptually.
+                            // However, we just yield here securely.
+                        }
+                        continuation?.yield(data)
+                        // Artificial delay to simulate real-time ingestion instead of blasting instantly
+                        // 65KB chunk approx = a few ms of typical video. Using a very short sleep.
+                        usleep(1000) 
+                    } else {
+                        keepReading = false
+                    }
+                }
+            }
+            print("UDPIngestor: Finished reading local file")
+        }
+    }
+    
     private func handleData(_ data: Data) {
         lastPacketTime = Date().timeIntervalSince1970
         if isStreamLost {
@@ -296,11 +341,12 @@ public actor UDPIngestor {
     }
     
 
-    fileprivate func updateAudioVisuals(waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+    fileprivate func updateAudioVisuals(waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
         self.audioWaveform = waveform
         self.audioVectorscope = vectorscope
         self.audioPhase = phase
-        onAudioVisualsCallback?(waveform, vectorscope, phase)
+        self.audioLevels = levels
+        onAudioVisualsCallback?(waveform, vectorscope, phase, levels)
     }
     
     public func setMuted(_ muted: Bool) {
@@ -312,9 +358,9 @@ fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
     weak var actor: UDPIngestor?
     let monitor: StreamMonitor
     let onVideoFrame: ((CVPixelBuffer) -> Void)?
-    let onAudioVisuals: (([Float], [CGPoint], [Float]) -> Void)?
+    let onAudioVisuals: (([Float], [CGPoint], [Float], [Float]) -> Void)?
     
-    init(actor: UDPIngestor, monitor: StreamMonitor, onVideoFrame: ((CVPixelBuffer) -> Void)?, onAudioVisuals: (([Float], [CGPoint], [Float]) -> Void)?) {
+    init(actor: UDPIngestor, monitor: StreamMonitor, onVideoFrame: ((CVPixelBuffer) -> Void)?, onAudioVisuals: (([Float], [CGPoint], [Float], [Float]) -> Void)?) {
         self.actor = actor
         self.monitor = monitor
         self.onVideoFrame = onVideoFrame
@@ -335,10 +381,10 @@ fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
         }
     }
     
-    func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
-        onAudioVisuals?(waveform, vectorscope, phase)
+    func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
+        onAudioVisuals?(waveform, vectorscope, phase, levels)
         Task {
-            await actor?.updateAudioVisuals(waveform: waveform, vectorscope: vectorscope, phase: phase)
+            await actor?.updateAudioVisuals(waveform: waveform, vectorscope: vectorscope, phase: phase, levels: levels)
         }
     }
 }

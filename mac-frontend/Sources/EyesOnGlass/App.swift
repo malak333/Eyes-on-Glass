@@ -1,7 +1,6 @@
 import SwiftUI
 import SwiftData
 
-@main
 struct EyesOnGlassApp: App {
     var body: some Scene {
         WindowGroup {

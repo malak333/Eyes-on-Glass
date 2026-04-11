@@ -44,7 +44,7 @@ class UIVisualsRenderer: @unchecked Sendable {
         }
     }
     
-    func render(waveform: [Float], vectorscope: [CGPoint], phase: [Float]) {
+    func render(waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
         audioQueue.async {
             let now = CFAbsoluteTimeGetCurrent()
             guard now - self.lastAudioRenderTime >= 1.0 / 30.0 else { return }
@@ -58,6 +58,7 @@ class UIVisualsRenderer: @unchecked Sendable {
                         StreamController.shared.audioWaveformData = waveform
                         StreamController.shared.audioVectorscopeData = vectorscope
                         StreamController.shared.audioPhaseData = phase
+                        StreamController.shared.audioLevelsData = levels
                     }
                 }
                 
@@ -88,7 +89,7 @@ actor LiveStreamService {
         return (nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil, nil)
     }
     
-    func getAudioVisuals() async -> (waveform: [Float], vectorscope: [CGPoint], phase: [Float])? {
+    func getAudioVisuals() async -> (waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float])? {
         if let ingestor = ingestor {
             return await ingestor.audioVisuals
         }
@@ -118,8 +119,8 @@ actor LiveStreamService {
                 }
             }, onVideoFrame: { pixelBuffer in
                 UIVisualsRenderer.shared.render(pixelBuffer: pixelBuffer)
-            }, onAudioVisuals: { waveform, vectorscope, phase in
-                UIVisualsRenderer.shared.render(waveform: waveform, vectorscope: vectorscope, phase: phase)
+            }, onAudioVisuals: { waveform, vectorscope, phase, levels in
+                UIVisualsRenderer.shared.render(waveform: waveform, vectorscope: vectorscope, phase: phase, levels: levels)
             }, onPacket: { count in
                 Task {
                     await ExtractionProgress.shared.setPackets(count, for: sessionName)

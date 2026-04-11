@@ -5,11 +5,29 @@ import UniformTypeIdentifiers
 import Accelerate
 
 struct ExtractionService: Sendable {
+    private static var ffmpegPath: String {
+        let paths = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+        for p in paths { if FileManager.default.fileExists(atPath: p) { return p } }
+        return "/usr/bin/env"
+    }
+    
+    private static var ffprobePath: String {
+        let paths = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
+        for p in paths { if FileManager.default.fileExists(atPath: p) { return p } }
+        return "/usr/bin/env"
+    }
+
     static func detectFreeze(videoPath: String) async -> [(Double, Double)] {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
+        let binPath = ffmpegPath
+        process.executableURL = URL(fileURLWithPath: binPath)
+        process.arguments = (binPath == "/usr/bin/env") ? [
             "ffmpeg", "-nostdin", "-i", videoPath,
+            "-an",
+            "-vf", "freezedetect=n=-60dB:d=2.0",
+            "-f", "null", "-"
+        ] : [
+            "-nostdin", "-i", videoPath,
             "-an",
             "-vf", "freezedetect=n=-60dB:d=2.0",
             "-f", "null", "-"
@@ -80,9 +98,15 @@ struct ExtractionService: Sendable {
 
         if useFFmpegFallback && !hasLipSync {
             let ptsProcess = Process()
-            ptsProcess.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            ptsProcess.arguments = [
+            let binPath = ffprobePath
+            ptsProcess.executableURL = URL(fileURLWithPath: binPath)
+            ptsProcess.arguments = (binPath == "/usr/bin/env") ? [
                 "ffprobe", "-v", "error",
+                "-show_entries", "stream=codec_type,start_time",
+                "-of", "json",
+                videoURL.path
+            ] : [
+                "-v", "error",
                 "-show_entries", "stream=codec_type,start_time",
                 "-of", "json",
                 videoURL.path
@@ -290,12 +314,18 @@ struct ExtractionService: Sendable {
         if useFFmpegFallback {
             appLogger.warning("Deciding to use FFmpeg fallback for \(filename)")
             let ffmpeg = Process()
-            ffmpeg.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            let binPath = ffmpegPath
+            ffmpeg.executableURL = URL(fileURLWithPath: binPath)
             let pattern = thumbnailsDir.appendingPathComponent("\(filename)_frame_%04d.jpg").path
-            ffmpeg.arguments = [
+            ffmpeg.arguments = (binPath == "/usr/bin/env") ? [
                 "ffmpeg", "-y", "-nostdin", "-v", "error",
                 "-i", videoURL.path,
-                "-vsync", "0",
+                "-vf", "fps=\(fps)",
+                "-qscale:v", "2",
+                pattern
+            ] : [
+                "-y", "-nostdin", "-v", "error",
+                "-i", videoURL.path,
                 "-vf", "fps=\(fps)",
                 "-qscale:v", "2",
                 pattern
@@ -402,7 +432,19 @@ struct ExtractionService: Sendable {
         let totalFramesCount = framesToAnalyze.count
         await ExtractionProgress.shared.set(status: "analyzing", current: 0, total: totalFramesCount, for: filename)
         
-        var logsToSave: [VideoLog] = []
+        struct TempVideoLog: Sendable {
+            let videoFilename: String
+            let timestampSec: Double
+            let nodeSource: String
+            let nodeBackbone: String
+            let nodeDest: String
+            let issueType: String
+            let issueScore: Double
+            let analysisEngine: String
+            let thumbnailPath: String?
+        }
+        
+        var logsToSave: [TempVideoLog] = []
         var anyVideoFramesSaved = false
 
         let captureHasStatic = hasStatic
@@ -415,7 +457,7 @@ struct ExtractionService: Sendable {
         
         let maxConcurrentTasks = ProcessInfo.processInfo.activeProcessorCount * 2
         
-        await withTaskGroup(of: (Int, [VideoLog]).self) { group in
+        await withTaskGroup(of: (Int, [TempVideoLog]).self) { group in
             var currentIndex = 0
             var completedCount = 0
             
@@ -498,18 +540,19 @@ struct ExtractionService: Sendable {
                         }
                     }
                     
-                    var newLogs: [VideoLog] = []
+                    var newLogs: [TempVideoLog] = []
                     for (issue, score, engine) in issuesFound {
-                        var log = VideoLog()
-                        log.videoFilename = filename
-                        log.timestampSec = timestamp
-                        log.nodeSource = "Primary-Ingest-A"
-                        log.nodeBackbone = "East-Backbone-2"
-                        log.nodeDest = "Distribution-Node"
-                        log.issueType = issue
-                        log.issueScore = score
-                        log.analysisEngine = engine
-                        log.thumbnailPath = frameName
+                        let log = TempVideoLog(
+                            videoFilename: filename,
+                            timestampSec: timestamp,
+                            nodeSource: "Primary-Ingest-A",
+                            nodeBackbone: "East-Backbone-2",
+                            nodeDest: "Distribution-Node",
+                            issueType: issue,
+                            issueScore: score,
+                            analysisEngine: engine,
+                            thumbnailPath: frameName
+                        )
                         newLogs.append(log)
                     }
                     
