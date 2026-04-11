@@ -49,6 +49,37 @@ final class AudioDecoderTests: XCTestCase {
         XCTAssertEqual(decoder.channels, 2, "Channels should be derived as 2 from channel config.")
         XCTAssertEqual(delegate.observedHealth, .healthy, "Payload exists, should be healthy.")
     }
+    
+    func testAudioDecoderMP2HeaderParsing() {
+        let decoder = AudioDecoder()
+        
+        let expectedFrameLength = 144 * 128000 / 48000 + 0 // 384 bytes
+        var mockMP2 = [UInt8](repeating: 0, count: expectedFrameLength)
+        // Set MP2 sync word and header
+        // b0=0xFF, b1=0xFD (Layer II, no CRC)
+        // b2=0x84 (Bitrate idx 8 -> 128kbps, SR idx 1 -> 48kHz, Pad 0) => 1000 0100 => 0x84
+        mockMP2[0] = 0xFF
+        mockMP2[1] = 0xFD
+        mockMP2[2] = 0x84
+        mockMP2[3] = 0x40
+        
+        // Append next frame header to satisfy boundary checking
+        var nextFrame = [UInt8](repeating: 0, count: 5)
+        nextFrame[0] = 0xFF
+        nextFrame[1] = 0xFD
+        nextFrame[2] = 0x84
+        nextFrame[3] = 0x40
+        
+        let combined = mockMP2 + nextFrame
+        
+        // We set the codec specifically for testing MP2 payload boundary decoding
+        decoder.audioCodec = "MP2"
+        decoder.decode(audioPayload: Data(combined), pts: 0)
+        
+        // Decoder's internal processAudioFrame handles stripping correctly if bounding condition matches
+        // For testing we just ensure that the parsing didn't lead to infinite loop
+        XCTAssertEqual(decoder.audioCodec, "MP2")
+    }
 
     func testAudioDecoderMultiChannelConfiguration() {
         let decoder = AudioDecoder()

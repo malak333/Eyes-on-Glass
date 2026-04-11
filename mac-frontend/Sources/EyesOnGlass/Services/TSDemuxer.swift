@@ -152,7 +152,30 @@ public class TSDemuxer {
             if payload.count > 6 && payload[0] == 0x00 && payload[1] == 0x00 && payload[2] == 0x01 {
                 let streamID = payload[3]
                 let isVideo = streamID >= 0xE0 && streamID <= 0xEF
-                let isAudio = (streamID >= 0xC0 && streamID <= 0xDF) || streamID == 0xBD
+                var isAudio = (streamID >= 0xC0 && streamID <= 0xDF) || streamID == 0xBD
+                
+                let start = getPESPayloadStart(from: payload)
+                if isAudio && start < payload.count {
+                    var hasSync = false
+                    for i in start..<payload.count - 1 {
+                        let b0 = payload[i]
+                        let b1 = payload[i+1]
+                        
+                        if streamID == 0xBD && b0 == 0x0B && b1 == 0x77 {
+                            hasSync = true
+                            break
+                        }
+                        
+                        if streamID >= 0xC0 && streamID <= 0xDF {
+                            // AAC ADTS or MP2/MP3
+                            if b0 == 0xFF && ((b1 & 0xF6) == 0xF0 || (b1 & 0xE0) == 0xE0) {
+                                hasSync = true
+                                break
+                            }
+                        }
+                    }
+                    if !hasSync { isAudio = false }
+                }
                 
                 if isVideo {
                     if lockedVideoPID == nil {
@@ -166,7 +189,6 @@ public class TSDemuxer {
                              currentVideoPTS = parsedPtsDts.0
                              currentVideoDTS = parsedPtsDts.1
                          }
-                         let start = getPESPayloadStart(from: payload)
                          if start < payload.count {
                              let boundary = videoStreamBuffer.endIndex
                              videoStreamBuffer.append(payload.suffix(from: start))
@@ -190,7 +212,6 @@ public class TSDemuxer {
                          let start = getPESPayloadStart(from: payload)
                          if start < payload.count {
                              audioStreamBuffer.append(payload.suffix(from: start))
-                             extractAudioFrames()
                              isGatheringAudioPES = true
                          } else if start == payload.count {
                              isGatheringAudioPES = true
@@ -205,7 +226,6 @@ public class TSDemuxer {
                 extractNALUnits(boundary: boundary, oldPts: currentVideoPTS, oldDts: currentVideoDTS)
             } else if isGatheringAudioPES && lockedAudioPID == pid {
                 audioStreamBuffer.append(payload)
-                extractAudioFrames()
             }
         }
     }

@@ -1,0 +1,10 @@
+--- Sources/EyesOnGlass/Services/AudioDecoder.swift
++++ Sources/EyesOnGlass/Services/AudioDecoder.swift
+@@ -321,6 +321,7 @@
+                     }
+                     
+                     let status = converter.convert(to: pcmBuffer, error: &error, withInputFrom: inputBlock)
++                    if status != .haveData { print("AVAudioConverter status for \(codec): \(status.rawValue), error: \(String(describing: error)), inData: \(audioData.count)") }
+                     if status == .haveData || status == .endOfStream {
+                         if pcmBuffer.frameLength > 0 {
+                             if let arrays = extractVisuals(from: pcmBuffer) {

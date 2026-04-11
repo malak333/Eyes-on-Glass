@@ -38,6 +38,7 @@ public class AudioDecoder {
     private var converter: AVAudioConverter?
     private var outFormat: AVAudioFormat?
     private var isConfigured = false
+    private var audioResidue = Data()
     
     // FFT Setup
     private var setupPath: vDSP_DFT_Setup?
@@ -79,79 +80,87 @@ public class AudioDecoder {
         }
         
         if !audioPayload.isEmpty && audioPayload.count > 7 {
+            var payload = audioPayload
             if !isConfigured {
-                if detectCodec(payload: audioPayload, offset: 0) {
+                let offset = detectCodec(payload: payload)
+                if offset >= 0 {
+                    if offset > 0 {
+                        payload = payload.suffix(from: offset)
+                    }
                     configureDecoder()
-                    // If we need to propagate the name, we skip explicit callbacks and just use StreamInfo binding which polls properties.
                 }
             }
             
             if isConfigured {
-                processAudioFrame(payload: audioPayload)
+                processAudioFrame(payload: payload)
             }
         }
         
         delegate?.decoder(self, didDecodeHealth: health, pts: pts)
     }
     
-    private func detectCodec(payload: Data, offset: Int) -> Bool {
-        guard offset + 4 < payload.count else { return false }
+    private func detectCodec(payload: Data) -> Int {
+        let maxWindow = min(1500, payload.count - 5)
+        if maxWindow <= 0 { return -1 }
         
-        let b0 = payload[offset]
-        let b1 = payload[offset+1]
-        
-        // AAC ADTS
-        if b0 == 0xFF && (b1 & 0xF0) == 0xF0 {
-            self.audioCodec = "AAC"
-            let freqIndex = Int((payload[offset+2] & 0x3C) >> 2)
-            let channelConfig = Int(((payload[offset+2] & 0x01) << 2) | ((payload[offset+3] & 0xC0) >> 6))
-            if freqIndex < sampleFrequencies.count {
-                self.sampleRate = sampleFrequencies[freqIndex]
-            }
-            self.channels = channelConfig > 0 ? channelConfig : 2
-            return true
-        }
-        
-        // MP2 / MP3
-        if b0 == 0xFF && (b1 & 0xE0) == 0xE0 {
-            let layer = (b1 >> 1) & 0x03
-            if layer == 0x02 {
-                self.audioCodec = "MP2"
-            } else if layer == 0x01 {
-                self.audioCodec = "MP3"
-            } else {
-                return false
+        for offset in 0..<maxWindow {
+            let b0 = payload[offset]
+            let b1 = payload[offset+1]
+            
+            // AAC ADTS
+            if b0 == 0xFF && (b1 & 0xF6) == 0xF0 {
+                self.audioCodec = "AAC"
+                let freqIndex = Int((payload[offset+2] & 0x3C) >> 2)
+                let channelConfig = Int(((payload[offset+2] & 0x01) << 2) | ((payload[offset+3] & 0xC0) >> 6))
+                if freqIndex < sampleFrequencies.count {
+                    self.sampleRate = sampleFrequencies[freqIndex]
+                }
+                self.channels = channelConfig > 0 ? channelConfig : 2
+                return offset
             }
             
-            let b2 = payload[offset+2]
-            let srIdx = Int((b2 >> 2) & 0x03)
-            let mpeg1SampleRates = [44100, 48000, 32000, 48000]
-            self.sampleRate = mpeg1SampleRates[srIdx]
+            // MP2 / MP3
+            if b0 == 0xFF && (b1 & 0xE0) == 0xE0 {
+                let layer = (b1 >> 1) & 0x03
+                if layer == 0x02 {
+                    self.audioCodec = "MP2"
+                } else if layer == 0x01 {
+                    self.audioCodec = "MP3"
+                } else {
+                    continue
+                }
+                
+                let b2 = payload[offset+2]
+                let srIdx = Int((b2 >> 2) & 0x03)
+                let bitrateIdx = Int((b2 >> 4) & 0x0F)
+                if srIdx >= 3 || bitrateIdx == 0 || bitrateIdx == 15 { 
+                    continue 
+                }
+                
+                let mpeg1SampleRates = [44100, 48000, 32000, 48000]
+                self.sampleRate = mpeg1SampleRates[srIdx]
+                
+                let b3 = payload[offset+3]
+                let channelMode = Int((b3 >> 6) & 0x03)
+                self.channels = (channelMode == 3) ? 1 : 2
+                
+                return offset
+            }
             
-            let b3 = payload[offset+3]
-            let channelMode = Int((b3 >> 6) & 0x03)
-            self.channels = (channelMode == 3) ? 1 : 2
-            return true
-        }
-        
-        // AC-3
-        if b0 == 0x0B && b1 == 0x77 {
-            self.audioCodec = "AC-3"
-            if offset + 5 < payload.count {
+            // AC-3
+            if b0 == 0x0B && b1 == 0x77 {
+                self.audioCodec = "AC-3"
                 let fscod = Int((payload[offset+4] & 0xC0) >> 6)
                 let ac3SampleRates = [48000, 44100, 32000, 48000]
                 self.sampleRate = ac3SampleRates[fscod]
                 
                 let acmod = Int((payload[offset+4] & 0x38) >> 3)
                 self.channels = (acmod == 1) ? 1 : ((acmod == 2) ? 2 : 6)
-            } else {
-                self.sampleRate = 48000
-                self.channels = 2
+                return offset
             }
-            return true
         }
         
-        return false
+        return -1
     }
     
     private func configureDecoder() {
@@ -212,12 +221,14 @@ public class AudioDecoder {
         self.outFormat = outFormat
         self.converter = AVAudioConverter(from: validInFormat, to: outFormat)
         
-        let freqIndex = sampleFrequencies.firstIndex(of: sr) ?? 4
-        let asc: [UInt8] = [
-            UInt8((2 << 3) | (freqIndex >> 1)),
-            UInt8(((freqIndex & 0x01) << 7) | (ch << 3))
-        ]
-        self.converter?.magicCookie = Data(asc)
+        if codec == "AAC" {
+            let freqIndex = sampleFrequencies.firstIndex(of: sr) ?? 4
+            let asc: [UInt8] = [
+                UInt8((2 << 3) | (freqIndex >> 1)),
+                UInt8(((freqIndex & 0x01) << 7) | (ch << 3))
+            ]
+            self.converter?.magicCookie = Data(asc)
+        }
         
         // Setup Audio Playback
         engine.attach(playerNode)
@@ -238,21 +249,29 @@ public class AudioDecoder {
     private func processAudioFrame(payload: Data) {
         guard let converter = converter, let outFormat = outFormat, let codec = audioCodec else { return }
         
+        audioResidue.append(payload)
         var offset = 0
-        while offset + 4 < payload.count {
-            let b0 = payload[offset]
-            let b1 = payload[offset+1]
+        var audioData = Data()
+        var lastValidOffset = 0
+        var accumulatedPacketCount = 0
+        var chunkDescriptions: [(offset: Int, len: Int)] = []
+        
+        while offset + 5 < audioResidue.count {
+            let b0 = audioResidue[offset]
+            let b1 = audioResidue[offset+1]
             
             var frameLength = 0
             var packetCount = 1
             
-            if codec == "AAC" && b0 == 0xFF && (b1 & 0xF0) == 0xF0 {
-                if offset + 5 < payload.count {
-                    frameLength = ((Int(payload[offset+3]) & 0x03) << 11) | (Int(payload[offset+4]) << 3) | ((Int(payload[offset+5]) & 0xE0) >> 5)
+            if codec == "AAC" && b0 == 0xFF && (b1 & 0xF6) == 0xF0 {
+                frameLength = ((Int(audioResidue[offset+3]) & 0x03) << 11) | (Int(audioResidue[offset+4]) << 3) | ((Int(audioResidue[offset+5]) & 0xE0) >> 5)
+                if offset + frameLength > audioResidue.count {
+                    lastValidOffset = offset
+                    break
                 }
             } else if codec == "MP2" || codec == "MP3" {
                 if b0 == 0xFF && (b1 & 0xE0) == 0xE0 {
-                    let b2 = payload[offset+2]
+                    let b2 = audioResidue[offset+2]
                     let bitrateIdx = (Int(b2) >> 4) & 0x0F
                     let srIdx = (Int(b2) >> 2) & 0x03
                     let padding = (Int(b2) >> 1) & 0x01
@@ -260,82 +279,118 @@ public class AudioDecoder {
                     let mpeg1Layer3Bitrates = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0]
                     let mpeg1SampleRates = [44100, 48000, 32000, 48000]
                     
-                    if srIdx < 4 && bitrateIdx < 16 {
+                    if srIdx < 3 && bitrateIdx > 0 && bitrateIdx < 15 {
                         let bitrateArray = codec == "MP2" ? mpeg1Layer2Bitrates : mpeg1Layer3Bitrates
                         let bitrate = bitrateArray[bitrateIdx] * 1000
                         let sampleRate = mpeg1SampleRates[srIdx]
                         if sampleRate > 0 {
-                            frameLength = 144 * bitrate / sampleRate + padding
+                            let expectedFrameLength = 144 * bitrate / sampleRate + padding
+                            
+                            if offset + expectedFrameLength > audioResidue.count {
+                                lastValidOffset = offset
+                                break
+                            } else if offset + expectedFrameLength == audioResidue.count {
+                                frameLength = expectedFrameLength
+                            } else {
+                                let nb0 = audioResidue[offset + expectedFrameLength]
+                                let nb1 = audioResidue[offset + expectedFrameLength + 1]
+                                
+                                if nb0 == 0xFF && (nb1 & 0xE0) == 0xE0 {
+                                    frameLength = expectedFrameLength
+                                }
+                            }
                         }
                     }
                 }
             } else if codec == "AC-3" {
                 if b0 == 0x0B && b1 == 0x77 {
                     var nextSync = offset + 2
-                    while nextSync < payload.count - 1 {
-                        if payload[nextSync] == 0x0B && payload[nextSync+1] == 0x77 {
+                    while nextSync < audioResidue.count - 1 {
+                        if audioResidue[nextSync] == 0x0B && audioResidue[nextSync+1] == 0x77 {
                             break
                         }
                         nextSync += 1
                     }
-                    frameLength = nextSync - offset
+                    if nextSync == audioResidue.count - 1 {
+                        lastValidOffset = offset
+                        break // Wait for more data
+                    } else {
+                        frameLength = nextSync - offset
+                    }
                     packetCount = 1
                 }
             }
             
-            if frameLength > 0 && offset + frameLength <= payload.count {
-                let audioData = payload.subdata(in: offset..<(offset+frameLength))
+            if frameLength > 0 && offset + frameLength <= audioResidue.count {
+                let frameData = audioResidue.subdata(in: offset..<(offset+frameLength))
                 
-                let inBuffer = AVAudioCompressedBuffer(format: converter.inputFormat, packetCapacity: AVAudioPacketCount(max(1, packetCount)), maximumPacketSize: audioData.count)
-                inBuffer.packetCount = AVAudioPacketCount(packetCount)
-                inBuffer.byteLength = UInt32(audioData.count)
-                
-                audioData.withUnsafeBytes { rawPtr in
-                    if let ptr = rawPtr.bindMemory(to: UInt8.self).baseAddress {
-                        inBuffer.data.copyMemory(from: ptr, byteCount: audioData.count)
-                    }
-                }
-                
-                if packetCount == 1, let descs = inBuffer.packetDescriptions {
-                    descs[0].mStartOffset = 0
-                    descs[0].mDataByteSize = UInt32(audioData.count)
-                    descs[0].mVariableFramesInPacket = 0
-                }
-                
-                var hasData = true
-                while hasData {
-                    let framesToDecode: AVAudioFrameCount = codec == "AC-3" ? 4096 : 1152
-                    guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: framesToDecode) else { break }
-                    
-                    var error: NSError? = nil
-                    let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
-                        if hasData {
-                            outStatus.pointee = .haveData
-                            hasData = false
-                            return inBuffer
-                        } else {
-                            outStatus.pointee = .noDataNow
-                            return nil
-                        }
-                    }
-                    
-                    let status = converter.convert(to: pcmBuffer, error: &error, withInputFrom: inputBlock)
-                    if status == .haveData || status == .endOfStream {
-                        if pcmBuffer.frameLength > 0 {
-                            if let arrays = extractVisuals(from: pcmBuffer) {
-                                delegate?.decoder(self, didDecodeVisuals: arrays.0, vectorscope: arrays.1, phase: arrays.2)
-                            }
-                            self.playerNode.scheduleBuffer(pcmBuffer)
-                        }
-                    }
-                    if status == .inputRanDry || status == .endOfStream || status == .error || pcmBuffer.frameLength == 0 {
-                        break
-                    }
-                }
-                
+                chunkDescriptions.append((offset: audioData.count, len: frameLength))
+                audioData.append(frameData)
+                accumulatedPacketCount += packetCount
                 offset += frameLength
+                lastValidOffset = offset
             } else {
                 offset += 1
+                lastValidOffset = offset
+            }
+        }
+        
+        if lastValidOffset > 0 {
+            audioResidue.removeSubrange(0..<lastValidOffset)
+        }
+        if audioResidue.count > 100000 { audioResidue.removeAll() }
+        
+        if audioData.isEmpty { return }
+        
+        let inBuffer = AVAudioCompressedBuffer(format: converter.inputFormat, packetCapacity: AVAudioPacketCount(max(1, accumulatedPacketCount)), maximumPacketSize: audioData.count)
+        inBuffer.packetCount = AVAudioPacketCount(accumulatedPacketCount)
+        inBuffer.byteLength = UInt32(audioData.count)
+        
+        audioData.withUnsafeBytes { rawPtr in
+            if let ptr = rawPtr.bindMemory(to: UInt8.self).baseAddress {
+                inBuffer.data.copyMemory(from: ptr, byteCount: audioData.count)
+            }
+        }
+        
+        if let descs = inBuffer.packetDescriptions {
+            for (idx, chunk) in chunkDescriptions.enumerated() {
+                if idx < Int(inBuffer.packetCapacity) {
+                    descs[idx].mStartOffset = Int64(chunk.offset)
+                    descs[idx].mDataByteSize = UInt32(chunk.len)
+                    descs[idx].mVariableFramesInPacket = 0
+                }
+            }
+        }
+        
+        var hasData = true
+        while hasData {
+            let framesToDecode: AVAudioFrameCount = codec == "AC-3" ? 4096 : 1152
+            guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: framesToDecode) else { break }
+            
+            var error: NSError? = nil
+            let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
+                if hasData {
+                    outStatus.pointee = .haveData
+                    hasData = false
+                    return inBuffer
+                } else {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+            }
+            
+            let status = converter.convert(to: pcmBuffer, error: &error, withInputFrom: inputBlock)
+            
+            if status == .haveData || status == .endOfStream {
+                if pcmBuffer.frameLength > 0 {
+                    if let arrays = extractVisuals(from: pcmBuffer) {
+                        delegate?.decoder(self, didDecodeVisuals: arrays.0, vectorscope: arrays.1, phase: arrays.2)
+                    }
+                    self.playerNode.scheduleBuffer(pcmBuffer)
+                }
+            }
+            if status == .inputRanDry || status == .endOfStream || status == .error || pcmBuffer.frameLength == 0 {
+                break
             }
         }
     }
