@@ -6,7 +6,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     
     @MainActor
     public struct BatteryTestingCLI {
-        static func run() async {
+        static func run(baseDirectory: String = "/Users/michaelnobile/Video Assets", isTestMode: Bool = false) async {
             fputs("Starting Multi-Model Analysis Framework...\n", stderr)
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
     let container: ModelContainer
@@ -15,6 +15,11 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     } catch {
         print("Failed to initialize SwiftData: \(error)")
         return
+    }
+    
+    // Inject the isolated context into the StreamController so offline background extractions are preserved
+    await MainActor.run {
+        StreamController.shared.modelContext = container.mainContext
     }
     
     let fm = FileManager.default
@@ -34,8 +39,9 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
         let videoFiles = files.filter { $0.hasSuffix(".ts") || $0.hasSuffix(".mp4") }.sorted()
         
         var resultsDict = [String: Any]()
+        let executionTiers = isTestMode ? [.e2b] : tiersToRun
         
-        for tier in tiersToRun {
+        for tier in executionTiers {
             fputs("\n==================================\n", stderr)
             fputs("RUNNING PIPELINE AGAINST TIER: \(tier.rawValue)\n", stderr)
             fputs("==================================\n", stderr)
