@@ -4,6 +4,14 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist</key>
+		<data>
+		OVuqS8dH2Bl0E505/s6JGFSD5kk=
+		</data>
+		<key>Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib</key>
+		<data>
+		mPBCceysR+8T1ubyhGprHR+PvH8=
+		</data>
 		<key>Resources/swift-crypto_Crypto.bundle/PrivacyInfo.xcprivacy</key>
 		<data>
 		gtyjHWwZ8glpGc7yfO0ng/CvDwQ=
@@ -19,6 +27,20 @@
 	</dict>
 	<key>files2</key>
 	<dict>
+		<key>Resources/mlx-swift_Cmlx.bundle/Contents/Info.plist</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			c6HamsIHd9lhRJLSGm0Tp13CXE//sRWmA00tFf/E65I=
+			</data>
+		</dict>
+		<key>Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			cfKteI2G8pSGMVtVg1zm7RfOubAwL2uAQpMGNA3KKNE=
+			</data>
+		</dict>
 		<key>Resources/swift-crypto_Crypto.bundle/PrivacyInfo.xcprivacy</key>
 		<dict>
 			<key>hash2</key>

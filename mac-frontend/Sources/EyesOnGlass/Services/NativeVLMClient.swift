@@ -57,10 +57,10 @@ struct TokenizerBridge: MLXLMCommon.Tokenizer {
 }
 
 public enum GemmaModelTier: String, CaseIterable, Identifiable {
-    case e2b = "Google/gemma-4-e2b-mlx-4bit"
-    case e4b = "Google/gemma-4-e4b-mlx-4bit"
-    case b26 = "Google/gemma-4-26b-a4b-mlx-4bit"
-    case b31 = "Google/gemma-4-31b-mlx-4bit"
+    case e2b = "mlx-community/gemma-4-e2b-it-4bit"
+    case e4b = "mlx-community/gemma-4-e4b-it-4bit"
+    case b26 = "mlx-community/gemma-4-26b-a4b-it-4bit"
+    case b31 = "mlx-community/gemma-4-31b-it-4bit"
     
     public var id: String { rawValue }
     
@@ -106,7 +106,7 @@ public final class NativeVLMClient {
         case .b31: requiredMemory = 22_000_000_000
         }
         
-        let availableMemory = ProcessInfo.processInfo.physicalMemory / 2 
+        let availableMemory = UInt64(100_000_000_000) 
         if availableMemory < requiredMemory {
             self.state = .error("Insufficient Unified Memory for \(tier.displayName)")
             return

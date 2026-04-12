@@ -68,6 +68,7 @@ To execute the multi-model validation engine against the `.e2b`, `.e4b`, and `.b
 ```bash
 cd mac-frontend
 swift build
+./Scripts/build_metal_shaders.sh # Required: Compiles Native MLX Metal Shaders
 ANALYSIS_CLI=true HF_TOKEN="your_huggingface_read_token" ./.build/debug/EyesOnGlass --cli
 ```
 *(This directly pipes all telemetry and VLM output payload evaluations into a standalone `analysis_results.json` log for review. Make sure you have at least 16GB of Unified Memory free before validating the `b26` MoE architecture).*
@@ -93,6 +94,7 @@ The Swift Package Manager contains unit tests targeting the new Application laye
 From terminal:
 ```bash
 cd mac-frontend
+./Scripts/build_metal_shaders.sh # Ensures the MLX Metal shaders are present in the test cache
 swift test
 ```
 Or use the native `Cmd + U` shortcut directly within Xcode.

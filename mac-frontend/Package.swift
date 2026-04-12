@@ -12,7 +12,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.19.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", branch: "main")
+        .package(url: "https://github.com/adrgrondin/mlx-swift-lm", branch: "port/gemma-4-model")
     ],
     targets: [
         .executableTarget(

@@ -29,6 +29,10 @@ for ARCH in "${ARCH_LIST[@]}"; do
   swift build -c "$CONF" --arch "$ARCH"
 done
 
+# Build Metal shaders to resolve mlx-swift default.metallib crash
+"$ROOT/Scripts/build_metal_shaders.sh"
+
+
 APP="$ROOT/${APP_NAME}.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
@@ -137,6 +141,14 @@ if [[ ${#SWIFTPM_BUNDLES[@]} -gt 0 ]]; then
   for bundle in "${SWIFTPM_BUNDLES[@]}"; do
     cp -R "$bundle" "$APP/Contents/Resources/"
   done
+fi
+
+# Ensure default.metallib built by build_metal_shaders.sh is copied properly
+# We must copy the ENTIRE .bundle structure because mlx looks for 'mlx-swift_Cmlx.bundle' when running natively as an App
+if [[ -d "$ROOT/.build/xcodebuild/Debug/mlx-swift_Cmlx.bundle" ]]; then
+  cp -R "$ROOT/.build/xcodebuild/Debug/mlx-swift_Cmlx.bundle" "$APP/Contents/Resources/"
+elif [[ -d "$ROOT/.build/xcodebuild/Release/mlx-swift_Cmlx.bundle" ]]; then
+  cp -R "$ROOT/.build/xcodebuild/Release/mlx-swift_Cmlx.bundle" "$APP/Contents/Resources/"
 fi
 
 # Embed frameworks if any exist in the build folder.
