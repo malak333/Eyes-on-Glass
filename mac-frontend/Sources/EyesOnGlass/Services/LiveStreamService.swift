@@ -82,6 +82,14 @@ actor LiveStreamService {
     private var wasAudioHealthy: Bool? = nil
     private var activeSessionName: String?
     
+    // Ring Buffer for visual UI and Evidence export (30 frames max)
+    private var visualRingBuffer: [Data] = []
+    
+    // Macroblocking Series State
+    private var lastMacroblockingIndex: Int = -2
+    private var isCurrentMBSeriesVerified: Bool = false
+    private var currentMBVerifiedEngine: String = "opencv"
+    
     func getStreamInfo() async -> (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
         if let ingestor = ingestor {
             return await ingestor.streamInfo
@@ -105,6 +113,10 @@ actor LiveStreamService {
         lastOkLogTime = 0 
         frameCount = 0
         wasAudioHealthy = nil
+        lastMacroblockingIndex = -2
+        isCurrentMBSeriesVerified = false
+        currentMBVerifiedEngine = "opencv"
+        visualRingBuffer.removeAll()
         
         let thumbnailsDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/EyesOnGlass/thumbnails")
         try? FileManager.default.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
@@ -245,7 +257,17 @@ actor LiveStreamService {
         wasAudioHealthy = isAudioHealthy
         
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return }
+        
+        // Use HEIC compression via M-series Media Engine for ring buffer hardware optimization
+        if let heicData = ciContext.heifRepresentation(of: ciImage, format: .RGBA8, colorSpace: colorSpace, options: [:]) {
+            visualRingBuffer.append(heicData)
+            if visualRingBuffer.count > 30 {
+                visualRingBuffer.removeFirst()
+            }
+        }
+        
         guard let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) else { return }
         
         let frameID = UUID().uuidString
@@ -266,8 +288,43 @@ actor LiveStreamService {
                     if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")); videoIssueFound = true }
                     if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")); videoIssueFound = true }
                     let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
-                    if macroConfidence >= 0.50 && cv.laplacianVariance > 30.0 {
-                        issuesFound.append(("macroblocking", Double(macroConfidence), "opencv")); videoIssueFound = true
+                    appLogger.info("LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence)")
+                    if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
+                        let seriesGap = currentFrameIndex - lastMacroblockingIndex
+                        
+                        if seriesGap > 1 {
+                            // New series, verify it
+                            let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+                            let isVlmReady = await MainActor.run { 
+                                if case .ready = NativeVLMClient.shared.state { return true }
+                                return false 
+                            }
+                            
+                            if isVlmReady {
+                                let issues = await NativeVLMClient.shared.analyzeFrameForIssues(imagePath: thumbURL.path, tier: tier)
+                                if issues["macroblocking"] != nil {
+                                    isCurrentMBSeriesVerified = true
+                                    currentMBVerifiedEngine = tier.displayName
+                                    issuesFound.append(("macroblocking", Double(macroConfidence), tier.displayName))
+                                    videoIssueFound = true
+                                } else {
+                                    isCurrentMBSeriesVerified = false
+                                    appLogger.info("LLM rejected live macroblocking detection at \(currentFrameIndex)s.")
+                                }
+                            } else {
+                                isCurrentMBSeriesVerified = false
+                                appLogger.error("Local LLM model isn't available to verify macroblocking. Dropping unverified logs.")
+                            }
+                        } else {
+                            // Continuing series
+                            if isCurrentMBSeriesVerified {
+                                issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine))
+                                videoIssueFound = true
+                            }
+                        }
+                        
+                        // Extend window
+                        lastMacroblockingIndex = currentFrameIndex
                     }
                     if cv.hasTopArtifact {
                         issuesFound.append(("top_artifact", 1.0, "opencv")); videoIssueFound = true
@@ -276,11 +333,11 @@ actor LiveStreamService {
             }
             
             let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
-            if !videoIssueFound && currentFrameIndex % 5 == 0 {
-                let (isSlate, conf) = await NativeVLMClient.shared.analyzeFrame(imagePath: thumbURL.path, tier: tier)
-                if isSlate {
-                    issuesFound.append(("slate", conf, tier.displayName))
-                    videoIssueFound = true
+            
+            // Periodically ingest frames to maintain the VLM temporal cache context (~1 FPS)
+            if currentFrameIndex % 30 == 0 {
+                Task {
+                    await NativeVLMClient.shared.ingestFrameCache(imagePath: thumbURL.path, tier: tier)
                 }
             }
             

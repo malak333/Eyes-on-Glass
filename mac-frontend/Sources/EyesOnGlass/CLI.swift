@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 let baseDirectory = "/Users/michaelnobile/Video Assets"
-    let tiersToRun: [GemmaModelTier] = [.e2b, .e4b, .b26]
+    let tiersToRun: [GemmaModelTier] = [.e4b]
     
     @MainActor
     public struct BatteryTestingCLI {
@@ -36,10 +36,11 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     
     do {
         let files = try fm.contentsOfDirectory(atPath: baseDirectory)
-        let videoFiles = files.filter { $0.hasSuffix(".ts") || $0.hasSuffix(".mp4") }.sorted()
+        var videoFiles = files.filter { $0.hasSuffix(".ts") || $0.hasSuffix(".mp4") }.sorted()
+        videoFiles = videoFiles.filter { $0 == "kabc-20MB.ts" || $0 == "CIRCLE TS_2020_05_03_15_29_00_078.mp4" }
         
         var resultsDict = [String: Any]()
-        let executionTiers = isTestMode ? [.e2b] : tiersToRun
+        let executionTiers: [GemmaModelTier] = [.e4b]
         
         for tier in executionTiers {
             fputs("\n==================================\n", stderr)

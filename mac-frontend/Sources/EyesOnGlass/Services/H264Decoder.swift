@@ -157,8 +157,8 @@ public class H264Decoder {
     }
     
     private func createFormatDescription() {
-        guard !spsCollection.isEmpty else { print("H264Decoder: formatDesc failed - SPS empty"); return }
-        guard !ppsCollection.isEmpty else { print("H264Decoder: formatDesc failed - PPS empty"); return }
+        guard !spsCollection.isEmpty else { return }
+        guard !ppsCollection.isEmpty else { return }
         let allParamSets = spsCollection + ppsCollection
         let parameterSetSizes = allParamSets.map { $0.count }
         let nsDataArray = allParamSets.map { $0 as NSData }

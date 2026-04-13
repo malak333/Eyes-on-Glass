@@ -57,19 +57,13 @@ struct TokenizerBridge: MLXLMCommon.Tokenizer {
 }
 
 public enum GemmaModelTier: String, CaseIterable, Identifiable {
-    case e2b = "mlx-community/gemma-4-e2b-it-4bit"
     case e4b = "mlx-community/gemma-4-e4b-it-4bit"
-    case b26 = "mlx-community/gemma-4-26b-a4b-it-4bit"
-    case b31 = "mlx-community/gemma-4-31b-it-4bit"
     
     public var id: String { rawValue }
     
     public var displayName: String {
         switch self {
-        case .e2b: return "Gemma 4 E2B (Fastest)"
         case .e4b: return "Gemma 4 E4B (Balanced)"
-        case .b26: return "Gemma 4 26B-A4B (MoE, Heavy)"
-        case .b31: return "Gemma 4 31B (Dense, Ultra)"
         }
     }
 }
@@ -85,12 +79,14 @@ public enum VLMState {
 @Observable
 public final class NativeVLMClient {
     public static let shared = NativeVLMClient()
+    public static let macroblockingPrompt = "Analyze this video frame for broadcast anomalies. If you see any noticeable pixelation, blockiness, or compression artifacts, you must identify it precisely as 'macroblocking'. Be highly sensitive to these artifacts. Reply exclusively in valid JSON with a single key 'issues' mapping to an array of objects. Example: {\"issues\": [{\"type\": \"macroblocking\", \"confidence\": 0.9}]}. No other text."
     
     @MainActor public var state: VLMState = .notLoaded
-    @MainActor public var selectedTier: GemmaModelTier = .e2b
+    @MainActor public var selectedTier: GemmaModelTier = .e4b
     
     private let isolationQueue = DispatchQueue(label: "com.eyeson.vlm.inference", qos: .userInitiated)
     private var modelContainer: ModelContainer?
+    private var chatSession: ChatSession?
     
     private init() {}
     
@@ -100,10 +96,7 @@ public final class NativeVLMClient {
         
         let requiredMemory: UInt64
         switch tier {
-        case .e2b: requiredMemory = 4_000_000_000
         case .e4b: requiredMemory = 6_000_000_000
-        case .b26: requiredMemory = 16_000_000_000
-        case .b31: requiredMemory = 22_000_000_000
         }
         
         let availableMemory = UInt64(100_000_000_000) 
@@ -137,13 +130,37 @@ public final class NativeVLMClient {
                 using: EyesOnGlassTokenizerLoader()
             )
             
+            // Rolling KV Cache initialized here utilizing MLX LM's maxKVSize logic
+            // 350,000 limit accommodates ~1,000 Pyramidal/Variable Budget frames
+            let genParams = GenerateParameters(maxTokens: 50, maxKVSize: 350_000)
+            self.chatSession = ChatSession(self.modelContainer!, generateParameters: genParams)
+            
             self.state = .ready
         } catch {
             self.state = .error("Failed to load model: \(error.localizedDescription)")
         }
     }
     
-    public func analyzeFrame(imagePath: String, tier: GemmaModelTier) async -> (isSlate: Bool, confidence: Double) {
+    public func ingestFrameCache(imagePath: String, tier: GemmaModelTier) async {
+        let isReady = await MainActor.run { 
+            if case .ready = self.state { return true }
+            return false
+        }
+        guard isReady, let session = self.chatSession, let ciImage = CIImage(contentsOf: URL(fileURLWithPath: imagePath)) else { return }
+        
+        do {
+            // Apply variable visual token budget (downsample older context frames)
+            session.processing = UserInput.Processing(resize: CGSize(width: 256, height: 256))
+            session.generateParameters.maxTokens = 5
+            
+            // We stream into the cache, then ignore the output.
+            _ = try await session.respond(to: "log_frame", role: .user, image: .ciImage(ciImage))
+        } catch {
+            print("Failed to ingest frame context cache: \(error)")
+        }
+    }
+    
+    public func analyzeFrameForIssues(imagePath: String, tier: GemmaModelTier) async -> [String: Double] {
         // Ensure state is checked safely via MainActor
         let isReady = await MainActor.run { 
             if case .ready = self.state { return true }
@@ -151,42 +168,107 @@ public final class NativeVLMClient {
         }
         
         guard isReady else { 
-            return (false, 0.0) 
+            return [:]
         }
         
         
-        guard let url = URL(string: imagePath), let ciImage = CIImage(contentsOf: url), let container = self.modelContainer else {
-            return (false, 0.0)
+        guard let ciImage = CIImage(contentsOf: URL(fileURLWithPath: imagePath)), let session = self.chatSession else {
+            return [:]
         }
         
-        let prompt = "Does this frame appear to be a static slate or holding screen? Reply exclusively in valid JSON with keys 'is_slate' (boolean) and 'confidence' (float between 0.0 and 1.0). No other text."
+        let prompt = NativeVLMClient.macroblockingPrompt
         
         do {
-            let userInput = UserInput(prompt: prompt, images: [.ciImage(ciImage)])
-            let input = try await container.prepare(input: userInput)
-            let stream = try await container.generate(
-                input: input,
-                parameters: GenerateParameters(temperature: 0.0)
-            )
+            // High token budget relative to context frames for exact precision checks
+            session.processing = UserInput.Processing(resize: CGSize(width: 1024, height: 1024))
+            session.generateParameters.maxTokens = 100
             
-            var outputText = ""
-            for try await event in stream {
-                if case .chunk(let text) = event {
-                    outputText += text
+            let outputText = try await session.respond(to: prompt, role: .user, image: .ciImage(ciImage))
+            
+            print("NativeVLMClient output: \(outputText)")
+            
+            var cleanedText = outputText
+            let pattern = "```(?:json)?\\s*([\\s\\S]*?)\\s*```"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               let match = regex.firstMatch(in: outputText, options: [], range: NSRange(location: 0, length: outputText.utf16.count)),
+               let range = Range(match.range(at: 1), in: outputText) {
+                cleanedText = String(outputText[range])
+            } else {
+                let bracePattern = "\\{[\\s\\S]*\\}"
+                if let braceRegex = try? NSRegularExpression(pattern: bracePattern, options: []),
+                   let match = braceRegex.firstMatch(in: outputText, options: [], range: NSRange(location: 0, length: outputText.utf16.count)),
+                   let range = Range(match.range, in: outputText) {
+                    cleanedText = String(outputText[range])
+                }
+            }
+            cleanedText = cleanedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            var issuesDict: [String: Double] = [:]
+            
+            if let data = cleanedText.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                
+                var itemsToProcess: [[String: Any]] = []
+                if let issuesArray = json["issues"] as? [[String: Any]] {
+                    itemsToProcess = issuesArray
+                } else if let issueObj = json["issues"] as? [String: Any] {
+                    itemsToProcess.append(issueObj)
+                } else if json["type"] is String {
+                    itemsToProcess.append(json)
+                }
+                
+                for issueObj in itemsToProcess {
+                    if var type = issueObj["type"] as? String {
+                        let typeLower = type.lowercased()
+                        if typeLower.contains("macroblocking") || typeLower.contains("compression") || typeLower.contains("pixelation") || typeLower.contains("blockiness") || typeLower.contains("artifact") {
+                            type = "macroblocking"
+                        }
+                        
+                        if let confidence = issueObj["confidence"] as? Double {
+                            issuesDict[type] = confidence
+                        } else if let confidenceNum = issueObj["confidence"] as? NSNumber {
+                            issuesDict[type] = confidenceNum.doubleValue
+                        } else if let confString = issueObj["confidence"] as? String, let confDbl = Double(confString) {
+                            issuesDict[type] = confDbl
+                        } else {
+                            issuesDict[type] = 0.8
+                        }
+                    }
+                }
+                
+                if itemsToProcess.isEmpty, let stringArray = json["issues"] as? [String] {
+                    for typeString in stringArray {
+                        let typeLower = typeString.lowercased()
+                        var type = typeString
+                        if typeLower.contains("macroblocking") || typeLower.contains("compression") || typeLower.contains("pixelation") || typeLower.contains("blockiness") || typeLower.contains("artifact") {
+                            type = "macroblocking"
+                        }
+                        issuesDict[type] = 0.8
+                    }
+                }
+            } else {
+                print("NativeVLMClient parsing failed or not valid JSON. Cleaned text: \(cleanedText)")
+            }
+            
+            // Resilient fallback for models that output non-standard formats containing macroblocking signals
+            if issuesDict.isEmpty {
+                let lowerText = cleanedText.lowercased()
+                let emptyArrayPattern = "\"issues\"\\s*:\\s*\\[\\s*\\]"
+                let hasEmptyArray = lowerText.range(of: emptyArrayPattern, options: .regularExpression) != nil
+                
+                if !hasEmptyArray {
+                    if lowerText.contains("macroblocking") || lowerText.contains("compression") || 
+                       lowerText.contains("pixelation") || lowerText.contains("blockiness") || 
+                       lowerText.contains("artifact") {
+                        issuesDict["macroblocking"] = 0.8
+                    }
                 }
             }
             
-            guard let data = outputText.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return (false, 0.0)
-            }
-            
-            let isSlate = json["is_slate"] as? Bool ?? false
-            let confidence = json["confidence"] as? Double ?? 0.0
-            return (isSlate, confidence)
+            return issuesDict
         } catch {
             print("Frame inference failed: \(error)")
-            return (false, 0.0)
+            return [:]
         }
     }
 }

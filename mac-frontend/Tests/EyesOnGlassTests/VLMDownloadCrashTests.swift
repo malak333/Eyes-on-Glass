@@ -5,7 +5,7 @@ import MLXVLM
 
 final class VLMDownloadCrashTests: XCTestCase {
     func testGemma4LoadContainer() async throws {
-        let repo = Hub.Repo(id: "mlx-community/gemma-4-e2b-it-4bit")
+        let repo = Hub.Repo(id: "mlx-community/gemma-4-e4b-it-4bit")
         let hub = HubApi()
         
         print("Downloading all model files for snapshot...")

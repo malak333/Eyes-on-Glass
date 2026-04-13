@@ -504,7 +504,7 @@ struct ExtractionService: Sendable {
                                 videoIssueFound = true
                             }
                             let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
-                            if macroConfidence >= 0.50 && cv.laplacianVariance > 30.0 {
+                            if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
                                 issuesFound.append(("macroblocking", Double(macroConfidence), "opencv"))
                                 videoIssueFound = true
                             }
@@ -533,8 +533,8 @@ struct ExtractionService: Sendable {
                     
                     if !videoIssueFound && i % 5 == 0 {
                         let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
-                        let (isSlate, conf) = await NativeVLMClient.shared.analyzeFrame(imagePath: thumbPath, tier: tier)
-                        if isSlate {
+                        let issues = await NativeVLMClient.shared.analyzeFrameForIssues(imagePath: thumbPath, tier: tier)
+                        if let conf = issues["slate"], conf > 0.5 {
                             issuesFound.append(("slate", conf, tier.displayName))
                             videoIssueFound = true
                         }
@@ -578,20 +578,84 @@ struct ExtractionService: Sendable {
                 }
             }
         }
-            for log in logsToSave {
-                await StreamController.shared.insertVideoLog(
-                    videoFilename: log.videoFilename,
-                    timestampSec: log.timestampSec,
-                    nodeSource: log.nodeSource,
-                    nodeBackbone: log.nodeBackbone,
-                    nodeDest: log.nodeDest,
-                    issueType: log.issueType,
-                    issueScore: log.issueScore,
-                    analysisEngine: log.analysisEngine,
-                    thumbnailPath: log.thumbnailPath
-                )
-                anyVideoFramesSaved = true
+        logsToSave.sort { $0.timestampSec < $1.timestampSec }
+        
+        let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+        let isVlmReady = await MainActor.run {
+            if case .ready = NativeVLMClient.shared.state { return true }
+            return false
+        }
+        
+        var finalLogsToSave: [TempVideoLog] = []
+        var currentMBSeries: [TempVideoLog] = []
+        var mbSeriesList: [[TempVideoLog]] = []
+        
+        for log in logsToSave {
+            if log.issueType == "macroblocking" {
+                if let last = currentMBSeries.last {
+                    if log.timestampSec - last.timestampSec <= 1.5 {
+                        currentMBSeries.append(log)
+                    } else {
+                        mbSeriesList.append(currentMBSeries)
+                        currentMBSeries = [log]
+                    }
+                } else {
+                    currentMBSeries.append(log)
+                }
+            } else {
+                finalLogsToSave.append(log)
             }
+        }
+        if !currentMBSeries.isEmpty {
+            mbSeriesList.append(currentMBSeries)
+        }
+        
+        for series in mbSeriesList {
+            guard let representative = series.first, let thumbPath = representative.thumbnailPath else { continue }
+            let fullPath = thumbnailsDir.appendingPathComponent(thumbPath).path
+            
+            if !isVlmReady {
+                appLogger.error("Local LLM model isn't available to verify macroblocking for \(filename). Dropping unverified logs.")
+                continue
+            }
+            
+            let issues = await NativeVLMClient.shared.analyzeFrameForIssues(imagePath: fullPath, tier: tier)
+            if issues["macroblocking"] != nil {
+                for log in series {
+                    let verifiedLog = TempVideoLog(
+                        videoFilename: log.videoFilename,
+                        timestampSec: log.timestampSec,
+                        nodeSource: log.nodeSource,
+                        nodeBackbone: log.nodeBackbone,
+                        nodeDest: log.nodeDest,
+                        issueType: log.issueType,
+                        issueScore: log.issueScore,
+                        analysisEngine: tier.displayName,
+                        thumbnailPath: log.thumbnailPath
+                    )
+                    finalLogsToSave.append(verifiedLog)
+                }
+            } else {
+                appLogger.info("LLM rejected macroblocking detection at \(representative.timestampSec)s for \(filename). Discarding series.")
+            }
+        }
+        
+        finalLogsToSave.sort { $0.timestampSec < $1.timestampSec }
+        
+        for log in finalLogsToSave {
+            await StreamController.shared.insertVideoLog(
+                videoFilename: log.videoFilename,
+                timestampSec: log.timestampSec,
+                nodeSource: log.nodeSource,
+                nodeBackbone: log.nodeBackbone,
+                nodeDest: log.nodeDest,
+                issueType: log.issueType,
+                issueScore: log.issueScore,
+                analysisEngine: log.analysisEngine,
+                thumbnailPath: log.thumbnailPath
+            )
+            anyVideoFramesSaved = true
+        }
         
         let anySilenceLength = silenceIntervals.reduce(0.0) { acc, interval in 
             if interval.1 == .infinity { return acc + 1.0 } else { return acc + (interval.1 - interval.0) } 

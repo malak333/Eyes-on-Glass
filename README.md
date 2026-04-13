@@ -23,9 +23,12 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
    - **Live Multicast Integration (`LiveStreamService`)**: A dedicated concurrent actor natively ingests infinite UDP streams using low-level **BSD Sockets**. Processing leverages a multi-track parsing engine (`TSDemuxer`) extracting and locking onto both Audio and Video payloads simultaneously along with exact 33-bit Presentation Time Stamps (PTS). The Video track executes zero-copy hardware decoding via Apple Silicon's native VideoToolbox (`H264Decoder`).
    - **Real-Time Audio Telemetry**: The audio stream is actively monitored via continuous payload analysis (supporting ADTS AAC, MP2, MP3, and AC-3 codecs). AC-3 payload framing is rigorously mapped using static **ATSC A/52 standard guidelines** to prevent native buffer drops. `AVAudioConverter` transforms incoming audio packets into `Float32` linear PCM, which is immediately handed to Apple's **Accelerate** (vDSP) framework. This runs zero-latency Fast Fourier Transforms (FFTs), Phase Correlation computations, and per-channel true peak extraction. These signals are piped dynamically to front-end SwiftUI canvases to render real-time Waveforms, Vectorscopes, Audio Phase arrays, and multi-channel Audio Peak Bars (incorporating UI-driven peak-hold decay) at 30 fps.
 
-3. **Analysis Engine (`mlx-swift` & Gemma 4)**:
-   - Streams frames concurrently via standard Swift `Actor` execution loops. Math matrix routines executed natively via `vImage` and `Accelerate` check for laplacian threshold differences replacing heavyweight external dependencies.
-   - All cleanly extracted frames fall through to **Native AI Analyzers (`mlx-swift`)** utilizing Hugging Face Hub downloads to natively run Google Gemma 4 Multimodal family directly in Unified Memory.
+3. **Analysis Engine (Hybrid VLM Pipeline & Gemma 4 E4B)**:
+   - To optimize extreme performance, the application implements a **Hybrid VLM Pipeline** pairing classical computer vision heuristics natively with State-of-the-Art Generative AI.
+   - **OpenCV Junior Pre-Filter**: Streams frames concurrently via standard Swift `Actor` execution loops. Fast heuristics (like Laplacian variance and blockiness calculations) actively monitor stream health without invoking the LLM, flagging potentially anomalous frames cheaply.
+   - **Hardware-Accelerated Ring Buffer**: A persistent 30-frame visual trail is dynamically maintained in memory. To minimize overhead, raw `CVPixelBuffer` frames are synchronously encoded into HEIC (High-Efficiency Image Container) formats utilizing Apple's M4/M5 hardware Media Engine.
+   - **Gemma 4 "Senior Engineer" Validations**: Only when the OpenCV Pre-Filter exceeds explicit variance thresholds is the **Native AI Analyzer** triggered. An exclusive `mlx-swift` ChatSession pipeline interfaces with the dense `Gemma 4 E4B` tier (running natively in Unified Memory via Hugging Face Hub downloads) to thoroughly inspect the frame, evaluating whether the identified artifacts correctly represent genuine broadcast anomalies.
+   - **Temporal MLX Rolling Cache**: The pipeline replicates structural memory persistence via simulated Pyramidal Variable Token Budgeting. Background frames are smoothly injected into an `mlx-swift` `RotatingKVCache` at a downscaled `256px` resolution to maximize the context window (~1000 frames cap) before the LLM evaluates the primary anomalies with sharp `1024px` precision.
 
 4. **Telemetry Logging (`SwiftData`)**:
    - The application relies entirely on Apple’s **SwiftData** framework, bypassing third-party ORMs like Vapor’s Fluent. 
@@ -64,14 +67,14 @@ The glassmorphic macOS application will appear instantly, granting you access to
 
 In accordance with our Code-Style Guidelines (Autonomous Execution, Testing, and Quality Standards), the project features a fully decoupled, headless `Executable` testing harness designed to ingest raw streams and perform asynchronous MLX-VLM inferences iteratively against actual MLX Gemma model weights. 
 
-To execute the multi-model validation engine against the `.e2b`, `.e4b`, and `.b26` MLX architectures locally, supply your Hugging Face Authentication Token as an environment variable to securely fetch tensors from the Hub:
+To execute the validation engine natively against the `.e4b` MLX architecture locally, supply your Hugging Face Authentication Token as an environment variable to securely fetch tensors from the Hub:
 ```bash
 cd mac-frontend
 swift build
 ./Scripts/build_metal_shaders.sh # Required: Compiles Native MLX Metal Shaders
 ANALYSIS_CLI=true HF_TOKEN="your_huggingface_read_token" ./.build/debug/EyesOnGlass --cli
 ```
-*(This directly pipes all telemetry and VLM output payload evaluations into a standalone `analysis_results.json` log for review. Make sure you have at least 16GB of Unified Memory free before validating the `b26` MoE architecture).*
+*(This directly pipes all telemetry and VLM output payload evaluations into a standalone `analysis_results.json` log for review.)*
 
 ### 4. Packaging the Application for Distribution
 
