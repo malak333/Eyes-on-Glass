@@ -6,6 +6,14 @@ import MLXLMCommon
 import MLXVLM
 import Tokenizers
 import CoreImage
+import AVFoundation
+import Foundation
+
+public struct VLMAnomaly: Codable, Sendable {
+    public let type: String
+    public let confidence: Double
+    public let modality: String
+}
 
 public struct EyesOnGlassTokenizerLoader: MLXLMCommon.TokenizerLoader {
     public init() {}
@@ -79,7 +87,36 @@ public enum VLMState {
 @Observable
 public final class NativeVLMClient {
     public static let shared = NativeVLMClient()
-    public static let macroblockingPrompt = "Analyze this video frame for broadcast anomalies. If you see any noticeable pixelation, blockiness, or compression artifacts, you must identify it precisely as 'macroblocking'. Be highly sensitive to these artifacts. Reply exclusively in valid JSON with a single key 'issues' mapping to an array of objects. Example: {\"issues\": [{\"type\": \"macroblocking\", \"confidence\": 0.9}]}. No other text."
+    public static let multimodalPrompt = """
+    Analyze this sequence of video frames and its perfectly aligned audio buffer for broadcast anomalies.
+    You must report ANY detected issues from this precise list:
+    - macroblocking
+    - audio drop out
+    - no audio
+    - frozen screen
+    - black screen
+    - slate
+    - bars and tone
+    - static on video snowflakes
+    - lip sync issue
+    - buzzing audio
+    - distorted audio
+    Reply strictly in valid JSON as an array of objects matching this schema:
+    [{"type": "exact_string", "confidence": 0.99, "modality": "audio|video|sync"}]
+    If there are no issues, output []. No other text.
+    """
+    
+    public static let stageAPrompt = """
+    Compare these two video frames chronologically (frame 1 -> frame 2).
+    Has macroblocking or severe compression artifacting appeared in the second frame compared to the first?
+    Reply exclusively in JSON: {"detected": true} or {"detected": false}.
+    """
+    
+    public static let stageBPrompt = """
+    Analyze these three chronologically ordered frames representing an anomaly incident (Start, Peak Severity, End).
+    Provide a professional Incident Report summary (1-2 sentences) describing the visual severity, duration or extent of the interference observed across the sequence.
+    Reply exactly and only with the summary string. No preamble.
+    """
     
     @MainActor public var state: VLMState = .notLoaded
     @MainActor public var selectedTier: GemmaModelTier = .e4b
@@ -160,32 +197,29 @@ public final class NativeVLMClient {
         }
     }
     
-    public func analyzeFrameForIssues(imagePath: String, tier: GemmaModelTier) async -> [String: Double] {
-        // Ensure state is checked safely via MainActor
+    public func analyzeSequenceForIssues(frames: [String], tier: GemmaModelTier) async -> [VLMAnomaly] {
         let isReady = await MainActor.run { 
             if case .ready = self.state { return true }
             return false
         }
         
-        guard isReady else { 
-            return [:]
+        guard isReady, let session = self.chatSession else { 
+            return []
         }
-        
-        
-        guard let ciImage = CIImage(contentsOf: URL(fileURLWithPath: imagePath)), let session = self.chatSession else {
-            return [:]
-        }
-        
-        let prompt = NativeVLMClient.macroblockingPrompt
         
         do {
-            // High token budget relative to context frames for exact precision checks
-            session.processing = UserInput.Processing(resize: CGSize(width: 1024, height: 1024))
-            session.generateParameters.maxTokens = 100
+            // Processing parameters for sequential frames and audio
+            session.processing = UserInput.Processing(resize: CGSize(width: 512, height: 512))
+            session.generateParameters.maxTokens = 300
             
-            let outputText = try await session.respond(to: prompt, role: .user, image: .ciImage(ciImage))
+            // Construct the payload as per user directions: array of frame Data and single AudioBuffer
+            // Adjust arguments based on how MLXLM handles images + audio in v3.x
+            // Note: Use images array or individual appends based on UserInput.
+            let userInput = UserInput(prompt: NativeVLMClient.multimodalPrompt, images: frames.map { .url(URL(fileURLWithPath: $0)) }) 
             
-            print("NativeVLMClient output: \(outputText)")
+            let outputText = try await session.respond(to: NativeVLMClient.multimodalPrompt, role: .user, images: userInput.images, videos: userInput.videos)
+            
+            print("NativeVLMClient output: \\(outputText)")
             
             var cleanedText = outputText
             let pattern = "```(?:json)?\\s*([\\s\\S]*?)\\s*```"
@@ -193,82 +227,74 @@ public final class NativeVLMClient {
                let match = regex.firstMatch(in: outputText, options: [], range: NSRange(location: 0, length: outputText.utf16.count)),
                let range = Range(match.range(at: 1), in: outputText) {
                 cleanedText = String(outputText[range])
-            } else {
-                let bracePattern = "\\{[\\s\\S]*\\}"
-                if let braceRegex = try? NSRegularExpression(pattern: bracePattern, options: []),
-                   let match = braceRegex.firstMatch(in: outputText, options: [], range: NSRange(location: 0, length: outputText.utf16.count)),
-                   let range = Range(match.range, in: outputText) {
-                    cleanedText = String(outputText[range])
+            }
+            cleanedText = cleanedText.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            
+            if let data = cleanedText.data(using: String.Encoding.utf8) {
+                let decoder = JSONDecoder()
+                do {
+                    let anomalies = try decoder.decode([VLMAnomaly].self, from: data)
+                    return anomalies
+                } catch {
+                    print("Failed to decode standard array format: \\(error). Trying fallback.")
                 }
             }
-            cleanedText = cleanedText.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            var issuesDict: [String: Double] = [:]
-            
-            if let data = cleanedText.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                
-                var itemsToProcess: [[String: Any]] = []
-                if let issuesArray = json["issues"] as? [[String: Any]] {
-                    itemsToProcess = issuesArray
-                } else if let issueObj = json["issues"] as? [String: Any] {
-                    itemsToProcess.append(issueObj)
-                } else if json["type"] is String {
-                    itemsToProcess.append(json)
-                }
-                
-                for issueObj in itemsToProcess {
-                    if var type = issueObj["type"] as? String {
-                        let typeLower = type.lowercased()
-                        if typeLower.contains("macroblocking") || typeLower.contains("compression") || typeLower.contains("pixelation") || typeLower.contains("blockiness") || typeLower.contains("artifact") {
-                            type = "macroblocking"
-                        }
-                        
-                        if let confidence = issueObj["confidence"] as? Double {
-                            issuesDict[type] = confidence
-                        } else if let confidenceNum = issueObj["confidence"] as? NSNumber {
-                            issuesDict[type] = confidenceNum.doubleValue
-                        } else if let confString = issueObj["confidence"] as? String, let confDbl = Double(confString) {
-                            issuesDict[type] = confDbl
-                        } else {
-                            issuesDict[type] = 0.8
-                        }
-                    }
-                }
-                
-                if itemsToProcess.isEmpty, let stringArray = json["issues"] as? [String] {
-                    for typeString in stringArray {
-                        let typeLower = typeString.lowercased()
-                        var type = typeString
-                        if typeLower.contains("macroblocking") || typeLower.contains("compression") || typeLower.contains("pixelation") || typeLower.contains("blockiness") || typeLower.contains("artifact") {
-                            type = "macroblocking"
-                        }
-                        issuesDict[type] = 0.8
-                    }
-                }
-            } else {
-                print("NativeVLMClient parsing failed or not valid JSON. Cleaned text: \(cleanedText)")
-            }
-            
-            // Resilient fallback for models that output non-standard formats containing macroblocking signals
-            if issuesDict.isEmpty {
-                let lowerText = cleanedText.lowercased()
-                let emptyArrayPattern = "\"issues\"\\s*:\\s*\\[\\s*\\]"
-                let hasEmptyArray = lowerText.range(of: emptyArrayPattern, options: .regularExpression) != nil
-                
-                if !hasEmptyArray {
-                    if lowerText.contains("macroblocking") || lowerText.contains("compression") || 
-                       lowerText.contains("pixelation") || lowerText.contains("blockiness") || 
-                       lowerText.contains("artifact") {
-                        issuesDict["macroblocking"] = 0.8
-                    }
-                }
-            }
-            
-            return issuesDict
+            return []
         } catch {
-            print("Frame inference failed: \(error)")
-            return [:]
+            print("Sequence inference failed: \\(error)")
+            return []
         }
     }
+    
+    public func analyzeFrameForIssues(imagePath: String, tier: GemmaModelTier) async -> [String: Double] {
+        let anomalies = await analyzeSequenceForIssues(frames: [imagePath], tier: tier)
+        var issuesDict: [String: Double] = [:]
+        for anomaly in anomalies {
+            issuesDict[anomaly.type] = anomaly.confidence
+        }
+        return issuesDict
+    }
+    
+    public func analyzeStageA(lastGood: String, bad: String, tier: GemmaModelTier) async -> Bool {
+        let isReady = await MainActor.run { 
+            if case .ready = self.state { return true }
+            return false
+        }
+        guard isReady, let session = self.chatSession else { return false }
+        
+        do {
+            session.processing = UserInput.Processing(resize: CGSize(width: 512, height: 512))
+            session.generateParameters.maxTokens = 140
+            
+            let userInput = UserInput(prompt: NativeVLMClient.stageAPrompt, images: [lastGood, bad].map { .url(URL(fileURLWithPath: $0)) })
+            let outputText = try await session.respond(to: NativeVLMClient.stageAPrompt, role: .user, images: userInput.images, videos: userInput.videos)
+
+            let lower = outputText.lowercased()
+            return lower.contains("\"detected\": true") || lower.contains("\"detected\":true") || lower.contains("true")
+        } catch {
+            return false
+        }
+    }
+
+    public func analyzeStageB(start: String, peak: String, end: String, tier: GemmaModelTier) async -> String? {
+        let isReady = await MainActor.run { 
+            if case .ready = self.state { return true }
+            return false
+        }
+        guard isReady, let session = self.chatSession else { return nil }
+        
+        do {
+            session.processing = UserInput.Processing(resize: CGSize(width: 512, height: 512))
+            session.generateParameters.maxTokens = 560
+            
+            let userInput = UserInput(prompt: NativeVLMClient.stageBPrompt, images: [start, peak, end].map { .url(URL(fileURLWithPath: $0)) })
+            var outputText = try await session.respond(to: NativeVLMClient.stageBPrompt, role: .user, images: userInput.images, videos: userInput.videos)
+            
+            outputText = outputText.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            return outputText.isEmpty ? nil : outputText
+        } catch {
+            return nil
+        }
+    }
+    
 }

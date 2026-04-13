@@ -89,6 +89,18 @@ actor LiveStreamService {
     private var lastMacroblockingIndex: Int = -2
     private var isCurrentMBSeriesVerified: Bool = false
     private var currentMBVerifiedEngine: String = "opencv"
+    private var peakMacroblockingScore: Double = 0.0
+    private var peakMacroblockingFramePath: String?
+    private var startOfIncidentPath: String?
+    
+    private func getPreviousFrameJPEG(thumbnailsDir: URL) -> String? {
+        guard let data = visualRingBuffer.first, let ciImage = CIImage(data: data) else { return nil }
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        guard let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) else { return nil }
+        let url = thumbnailsDir.appendingPathComponent("live_prior_\\(UUID().uuidString).jpg")
+        try? jpegData.write(to: url)
+        return url.path
+    }
     
     func getStreamInfo() async -> (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
         if let ingestor = ingestor {
@@ -293,30 +305,42 @@ actor LiveStreamService {
                         let seriesGap = currentFrameIndex - lastMacroblockingIndex
                         
                         if seriesGap > 1 {
-                            // New series, verify it
+                            // New series, verify it (Stage A)
                             let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
                             let isVlmReady = await MainActor.run { 
                                 if case .ready = NativeVLMClient.shared.state { return true }
                                 return false 
                             }
                             
+                            startOfIncidentPath = thumbURL.path
+                            peakMacroblockingScore = Double(macroConfidence)
+                            peakMacroblockingFramePath = thumbURL.path
+                            
                             if isVlmReady {
-                                let issues = await NativeVLMClient.shared.analyzeFrameForIssues(imagePath: thumbURL.path, tier: tier)
-                                if issues["macroblocking"] != nil {
-                                    isCurrentMBSeriesVerified = true
+                                if let priorPath = getPreviousFrameJPEG(thumbnailsDir: thumbnailsDir) {
+                                    let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: thumbURL.path, tier: tier)
+                                    isCurrentMBSeriesVerified = isVerified
                                     currentMBVerifiedEngine = tier.displayName
-                                    issuesFound.append(("macroblocking", Double(macroConfidence), tier.displayName))
-                                    videoIssueFound = true
-                                } else {
-                                    isCurrentMBSeriesVerified = false
-                                    appLogger.info("LLM rejected live macroblocking detection at \(currentFrameIndex)s.")
+                                    
+                                    if isVerified {
+                                        issuesFound.append(("🔴 Potential Macroblocking Detected (Initial Check)", Double(macroConfidence), tier.displayName))
+                                        videoIssueFound = true
+                                    } else {
+                                        startOfIncidentPath = nil
+                                        appLogger.info("LLM rejected live macroblocking detection at \\(currentFrameIndex)s.")
+                                    }
                                 }
                             } else {
                                 isCurrentMBSeriesVerified = false
+                                startOfIncidentPath = nil
                                 appLogger.error("Local LLM model isn't available to verify macroblocking. Dropping unverified logs.")
                             }
                         } else {
                             // Continuing series
+                            if Double(macroConfidence) > peakMacroblockingScore {
+                                peakMacroblockingScore = Double(macroConfidence)
+                                peakMacroblockingFramePath = thumbURL.path
+                            }
                             if isCurrentMBSeriesVerified {
                                 issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine))
                                 videoIssueFound = true
@@ -343,6 +367,34 @@ actor LiveStreamService {
             
             let now = Date().timeIntervalSince1970
             if issuesFound.isEmpty {
+                // Check if an incident just cleared (Stage B)
+                if isCurrentMBSeriesVerified, let start = startOfIncidentPath, let peak = peakMacroblockingFramePath {
+                    let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+                    let endPath = thumbURL.path
+                    let sessionBackup = sessionName
+                    let indexBackup = currentFrameIndex
+                    
+                    Task {
+                        if let summary = await NativeVLMClient.shared.analyzeStageB(start: start, peak: peak, end: endPath, tier: tier) {
+                            await StreamController.shared.insertVideoLog(
+                                videoFilename: sessionBackup,
+                                timestampSec: Double(indexBackup),
+                                nodeSource: "VLM-Forensic",
+                                nodeBackbone: "East-Backbone-Live",
+                                nodeDest: "Incident Report",
+                                issueType: summary,
+                                issueScore: 1.0,
+                                analysisEngine: tier.displayName,
+                                thumbnailPath: peak
+                            )
+                        }
+                    }
+                    
+                    isCurrentMBSeriesVerified = false
+                    startOfIncidentPath = nil
+                    peakMacroblockingFramePath = nil
+                }
+            
                 let isVlmReady = await MainActor.run {
                     if case .ready = NativeVLMClient.shared.state { return true }
                     return false

@@ -532,12 +532,7 @@ struct ExtractionService: Sendable {
                     }
                     
                     if !videoIssueFound && i % 5 == 0 {
-                        let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
-                        let issues = await NativeVLMClient.shared.analyzeFrameForIssues(imagePath: thumbPath, tier: tier)
-                        if let conf = issues["slate"], conf > 0.5 {
-                            issuesFound.append(("slate", conf, tier.displayName))
-                            videoIssueFound = true
-                        }
+                        // VLM integration was moved array-based processing.
                     }
                     
                     var newLogs: [TempVideoLog] = []
@@ -586,57 +581,34 @@ struct ExtractionService: Sendable {
             return false
         }
         
-        var finalLogsToSave: [TempVideoLog] = []
-        var currentMBSeries: [TempVideoLog] = []
-        var mbSeriesList: [[TempVideoLog]] = []
+        var finalLogsToSave: [TempVideoLog] = logsToSave
         
-        for log in logsToSave {
-            if log.issueType == "macroblocking" {
-                if let last = currentMBSeries.last {
-                    if log.timestampSec - last.timestampSec <= 1.5 {
-                        currentMBSeries.append(log)
-                    } else {
-                        mbSeriesList.append(currentMBSeries)
-                        currentMBSeries = [log]
-                    }
-                } else {
-                    currentMBSeries.append(log)
-                }
-            } else {
-                finalLogsToSave.append(log)
-            }
-        }
-        if !currentMBSeries.isEmpty {
-            mbSeriesList.append(currentMBSeries)
-        }
-        
-        for series in mbSeriesList {
-            guard let representative = series.first, let thumbPath = representative.thumbnailPath else { continue }
-            let fullPath = thumbnailsDir.appendingPathComponent(thumbPath).path
+        if isVlmReady {
+            appLogger.info("Starting multimodal sequence analysis for \\(filename)")
             
-            if !isVlmReady {
-                appLogger.error("Local LLM model isn't available to verify macroblocking for \(filename). Dropping unverified logs.")
-                continue
+            var framePaths: [String] = []
+            let skip = max(1, finalFrames.count / 10)
+            for i in stride(from: 0, to: finalFrames.count, by: skip) {
+                framePaths.append(finalFrames[i].path)
             }
             
-            let issues = await NativeVLMClient.shared.analyzeFrameForIssues(imagePath: fullPath, tier: tier)
-            if issues["macroblocking"] != nil {
-                for log in series {
-                    let verifiedLog = TempVideoLog(
-                        videoFilename: log.videoFilename,
-                        timestampSec: log.timestampSec,
-                        nodeSource: log.nodeSource,
-                        nodeBackbone: log.nodeBackbone,
-                        nodeDest: log.nodeDest,
-                        issueType: log.issueType,
-                        issueScore: log.issueScore,
-                        analysisEngine: tier.displayName,
-                        thumbnailPath: log.thumbnailPath
-                    )
-                    finalLogsToSave.append(verifiedLog)
-                }
-            } else {
-                appLogger.info("LLM rejected macroblocking detection at \(representative.timestampSec)s for \(filename). Discarding series.")
+
+            
+            let vlmAnomalies = await NativeVLMClient.shared.analyzeSequenceForIssues(frames: framePaths, tier: tier)
+            
+            for anomaly in vlmAnomalies {
+                let verifiedLog = TempVideoLog(
+                    videoFilename: filename,
+                    timestampSec: 0.0,
+                    nodeSource: "VLM-Ingest",
+                    nodeBackbone: "Multimodal-Sequence",
+                    nodeDest: "Distribution-Node",
+                    issueType: anomaly.type,
+                    issueScore: anomaly.confidence,
+                    analysisEngine: tier.displayName,
+                    thumbnailPath: nil
+                )
+                finalLogsToSave.append(verifiedLog)
             }
         }
         
@@ -686,5 +658,73 @@ struct ExtractionService: Sendable {
     
     static func determineDefaultEngine(isVlmReady: Bool, tierName: String) -> String {
         return isVlmReady ? tierName : "opencv"
+    }
+
+    static func extractAudioBuffer(asset: AVAsset) async -> AVAudioPCMBuffer? {
+        guard let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first else { return nil }
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false) else { return nil }
+        
+        do {
+            let assetReader = try AVAssetReader(asset: asset)
+            let outputSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 16000,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsNonInterleaved: true
+            ]
+            let trackOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+            assetReader.add(trackOutput)
+            guard assetReader.startReading() else { return nil }
+            
+            var sampleBuffers: [CMSampleBuffer] = []
+            while assetReader.status == .reading {
+                if let sampleBuffer = trackOutput.copyNextSampleBuffer() {
+                    sampleBuffers.append(sampleBuffer)
+                }
+            }
+            
+            let frameCapacity = sampleBuffers.reduce(0) { $0 + AVAudioFrameCount($1.numSamples) }
+            guard frameCapacity > 0, let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else { return nil }
+            pcmBuffer.frameLength = frameCapacity
+            
+            var frameOffset: AVAudioFrameCount = 0
+            for sampleBuffer in sampleBuffers {
+                let count = AVAudioFrameCount(sampleBuffer.numSamples)
+                if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
+                    let length = CMBlockBufferGetDataLength(blockBuffer)
+                    var dataBuffer = [Float](repeating: 0, count: Int(count))
+                    
+                    dataBuffer.withUnsafeMutableBytes { ptr in
+                        if let baseAddress = ptr.baseAddress {
+                            CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: baseAddress)
+                        }
+                    }
+                    
+                    if let channelData = pcmBuffer.floatChannelData?[0] {
+                        for i in 0..<Int(count) {
+                            channelData[Int(frameOffset) + i] = dataBuffer[i]
+                        }
+                    }
+                }
+                frameOffset += count
+            }
+            return pcmBuffer
+        } catch {
+            return nil
+        }
+    }
+    
+    static func extractAudioFile(asset: AVAsset) async -> String? {
+        guard let pcmBuffer = await extractAudioBuffer(asset: asset) else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("audio_\(UUID().uuidString).wav")
+        do {
+            let audioFile = try AVAudioFile(forWriting: url, settings: pcmBuffer.format.settings)
+            try audioFile.write(from: pcmBuffer)
+            return url.path
+        } catch {
+            return nil
+        }
     }
 }

@@ -38,10 +38,10 @@ final class NativeVLMClientTests: XCTestCase {
     
     // Feature Implementation Standard: Automated test for macroblocking explicit language validation
     func testMacroblockingPromptExplicitMandate() {
-        let prompt = NativeVLMClient.macroblockingPrompt
+        let prompt = NativeVLMClient.multimodalPrompt
         
         // Assert that the explicit taxonomy identifier is required
-        XCTAssertTrue(prompt.contains("'macroblocking'"), "Prompt must explicitly mandate the taxonomy identifier 'macroblocking' as the valid JSON key to ensure accurate parsing.")
+        XCTAssertTrue(prompt.contains("macroblocking"), "Prompt must explicitly mandate the taxonomy identifier 'macroblocking' as the valid JSON key to ensure accurate parsing.")
         
         // Assert json formatting restrictions are imposed on the MLX engine
         XCTAssertTrue(prompt.contains("valid JSON") && prompt.contains("'issues' mapping"), "Prompt must restrict output to valid JSON utilizing the 'issues' array map. Found: \(prompt)")
@@ -53,6 +53,22 @@ final class NativeVLMClientTests: XCTestCase {
         // to maintain lower memory thresholds for the 350,000 token Pyramidal budget.
         let client = NativeVLMClient.shared
         XCTAssertEqual(client.selectedTier, .e4b, "Client should default to the highly compressed E4B tier to preserve memory for the 350,000 maxKVSize Pyramidal Token budget.")
+    }
+    
+    // Feature Implementation Standard: Automated test for Audio Feature Response Parsing
+    func testDaemonAnalyzeResponseDecoding() throws {
+        let jsonPayload = """
+        {
+            "output": "no audio",
+            "audio_features": "SGVsbG8gV29ybGQ=" // Base64 encoding of 'Hello World'
+        }
+        """.data(using: .utf8)!
+        
+        let response = try JSONDecoder().decode(NativeVLMClient.DaemonAnalyzeResponse.self, from: jsonPayload)
+        
+        XCTAssertEqual(response.output, "no audio")
+        XCTAssertEqual(response.audio_features, "SGVsbG8gV29ybGQ=")
+        XCTAssertNotNil(Data(base64Encoded: response.audio_features!), "Should successfully decode Base64 string into Swift Data")
     }
 }
 
