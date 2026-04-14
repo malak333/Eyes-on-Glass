@@ -101,12 +101,10 @@ actor LiveStreamService {
     private var peakMacroblockingFramePath: String?
     private var startOfIncidentPath: String?
     
-    private func getPreviousFrameJPEG(thumbnailsDir: URL) -> String? {
-        guard let data = visualRingBuffer.first, let ciImage = CIImage(data: data) else { return nil }
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
-        guard let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) else { return nil }
-        let url = thumbnailsDir.appendingPathComponent("live_prior_\(UUID().uuidString).jpg")
-        try? jpegData.write(to: url)
+    private func getPreviousFrameHEIC(thumbnailsDir: URL) -> String? {
+        guard let data = visualRingBuffer.first else { return nil }
+        let url = thumbnailsDir.appendingPathComponent("live_prior_\(UUID().uuidString).heic")
+        try? data.write(to: url)
         return url.path
     }
     
@@ -297,90 +295,115 @@ actor LiveStreamService {
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return }
         
         // Use HEIC compression via M-series Media Engine for ring buffer hardware optimization
+        var currentFrameHEIC: Data? = nil
         if let heicData = ciContext.heifRepresentation(of: ciImage, format: .RGBA8, colorSpace: colorSpace, options: [:]) {
+            currentFrameHEIC = heicData
             visualRingBuffer.append(heicData)
             if visualRingBuffer.count > 30 {
                 visualRingBuffer.removeFirst()
             }
         }
         
-        guard let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) else { return }
-        
         let frameID = UUID().uuidString
-        let thumbURL = thumbnailsDir.appendingPathComponent("live_\(frameID).jpg")
+        let thumbURL = thumbnailsDir.appendingPathComponent("live_\(frameID).heic")
+        var savedThumbPath: String? = nil
+        var retainFileOnDisk = false
         
-        do {
-            try jpegData.write(to: thumbURL)
-            
-            let cvResults = VisionAnalyzer.analyze(imagePath: thumbURL.path)
-            var issuesFound: [(String, Double, String)] = []
+        let cvResults = VisionAnalyzer.analyze(ciImage: ciImage, context: ciContext)
+        var issuesFound: [(String, Double, String)] = []
+        var needsDiskWrite = false
             
             if let cv = cvResults {
                 if cv.isBlackScreen {
                     issuesFound.append(("black_screen", 1.0, "opencv"))
+                    needsDiskWrite = true
                 } else {
-                    if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")) }
-                    if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")) }
+                    if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")); needsDiskWrite = true }
+                    if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")); needsDiskWrite = true }
                     let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
-                    appLogger.info("LiveStreamService MB Check - Frame \\(currentFrameIndex): blockiness=\\(cv.blockiness), variance=\\(cv.laplacianVariance), conf=\\(macroConfidence)")
+                    appLogger.info("LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence)")
+                    
                     if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
-                        let seriesGap = currentFrameIndex - lastMacroblockingIndex
-                        let wasGap = seriesGap > 1
-                        
-                        lastMacroblockingIndex = currentFrameIndex
-                        
-                        if wasGap && !isStageAVerifying {
-                            // New series, verify it (Stage A)
-                            let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
-                            let isVlmReady = await MainActor.run { 
-                                if case .ready = NativeVLMClient.shared.state { return true }
-                                return false 
-                            }
-                            
-                            startOfIncidentPath = thumbURL.path
-                            peakMacroblockingScore = Double(macroConfidence)
-                            peakMacroblockingFramePath = thumbURL.path
-                            
-                            isCurrentMBSeriesVerified = false // Guarantee reset
-                            
-                            if isVlmReady {
-                                if let priorPath = getPreviousFrameJPEG(thumbnailsDir: thumbnailsDir) {
-                                    isStageAVerifying = true
-                                    let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: thumbURL.path, tier: tier)
-                                    isStageAVerifying = false
-                                    isCurrentMBSeriesVerified = isVerified
-                                    currentMBVerifiedEngine = tier.displayName
-                                    
-                                    if isVerified {
-                                        issuesFound.append(("🔴 Potential Macroblocking Detected (Initial Check)", Double(macroConfidence), tier.displayName))
-                                    } else {
-                                        startOfIncidentPath = nil
-                                        peakMacroblockingFramePath = nil
-                                        appLogger.info("LLM rejected live macroblocking detection at \\(currentFrameIndex)s.")
-                                    }
-                                }
-                            } else {
-                                isCurrentMBSeriesVerified = false
-                                startOfIncidentPath = nil
-                                peakMacroblockingFramePath = nil
-                                appLogger.error("Local LLM model isn't available to verify macroblocking. Dropping unverified logs.")
-                            }
-                        } else {
-                            // Continuing series or evaluating during suspends
-                            if Double(macroConfidence) > peakMacroblockingScore {
-                                peakMacroblockingScore = Double(macroConfidence)
-                                peakMacroblockingFramePath = thumbURL.path
-                            }
-                            
-                            if isCurrentMBSeriesVerified {
-                                issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine))
-                            } else if isStageAVerifying {
-                                issuesFound.append(("macroblocking_verifying", Double(macroConfidence), "Verifying..."))
-                            }
-                        }
+                        needsDiskWrite = true
                     }
                     if cv.hasTopArtifact {
                         issuesFound.append(("top_artifact", 1.0, "opencv"))
+                        needsDiskWrite = true
+                    }
+                }
+            }
+            
+            if issuesFound.isEmpty && isCurrentMBSeriesVerified && startOfIncidentPath != nil && peakMacroblockingFramePath != nil {
+                needsDiskWrite = true
+            }
+            
+            if needsDiskWrite {
+                if let heicData = currentFrameHEIC {
+                    do {
+                        try heicData.write(to: thumbURL)
+                        savedThumbPath = thumbURL.path
+                    } catch {
+                        appLogger.error("LiveStreamService: failed to write frame: \(error, privacy: .public)")
+                    }
+                }
+            }
+            
+            if let cv = cvResults, !cv.isBlackScreen {
+                let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
+                if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
+                    let seriesGap = currentFrameIndex - lastMacroblockingIndex
+                    let wasGap = seriesGap > 1
+                    
+                    lastMacroblockingIndex = currentFrameIndex
+                    
+                    if wasGap && !isStageAVerifying {
+                        // New series, verify it (Stage A)
+                        let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+                        let isVlmReady = await MainActor.run { 
+                            if case .ready = NativeVLMClient.shared.state { return true }
+                            return false 
+                        }
+                        
+                        startOfIncidentPath = savedThumbPath
+                        peakMacroblockingScore = Double(macroConfidence)
+                        peakMacroblockingFramePath = savedThumbPath
+                        
+                        isCurrentMBSeriesVerified = false // Guarantee reset
+                        
+                        if isVlmReady {
+                            if let priorPath = getPreviousFrameHEIC(thumbnailsDir: thumbnailsDir), let currentPath = savedThumbPath {
+                                isStageAVerifying = true
+                                let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: currentPath, tier: tier)
+                                isStageAVerifying = false
+                                isCurrentMBSeriesVerified = isVerified
+                                currentMBVerifiedEngine = tier.displayName
+                                
+                                if isVerified {
+                                    issuesFound.append(("🔴 Potential Macroblocking Detected (Initial Check)", Double(macroConfidence), tier.displayName))
+                                } else {
+                                    startOfIncidentPath = nil
+                                    peakMacroblockingFramePath = nil
+                                    appLogger.info("LLM rejected live macroblocking detection at \(currentFrameIndex)s.")
+                                }
+                            }
+                        } else {
+                            isCurrentMBSeriesVerified = false
+                            startOfIncidentPath = nil
+                            peakMacroblockingFramePath = nil
+                            appLogger.error("Local LLM model isn't available to verify macroblocking. Dropping unverified logs.")
+                        }
+                    } else {
+                        // Continuing series or evaluating during suspends
+                        if let currentPath = savedThumbPath, Double(macroConfidence) > peakMacroblockingScore {
+                            peakMacroblockingScore = Double(macroConfidence)
+                            peakMacroblockingFramePath = currentPath
+                        }
+                        
+                        if isCurrentMBSeriesVerified {
+                            issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine))
+                        } else if isStageAVerifying {
+                            issuesFound.append(("macroblocking_verifying", Double(macroConfidence), "Verifying..."))
+                        }
                     }
                 }
             }
@@ -389,14 +412,14 @@ actor LiveStreamService {
             
             if issuesFound.isEmpty {
                 // Check if an incident just cleared (Stage B)
-                if isCurrentMBSeriesVerified, let start = startOfIncidentPath, let peak = peakMacroblockingFramePath {
-                    let endPath = thumbURL.path
+                if isCurrentMBSeriesVerified, let start = startOfIncidentPath, let peak = peakMacroblockingFramePath, let endPath = savedThumbPath {
                     let sessionBackup = sessionName
                     let indexBackup = currentFrameIndex
                     
                     isCurrentMBSeriesVerified = false
                     startOfIncidentPath = nil
                     peakMacroblockingFramePath = nil
+                    retainFileOnDisk = true
                     
                     Task(priority: .utility) {
                         if let summary = await NativeVLMClient.shared.analyzeStageB(start: start, peak: peak, end: endPath, tier: tier) {
@@ -454,10 +477,9 @@ actor LiveStreamService {
                         lastOkLogTime = now
                     }
                 }
-                
-                try? FileManager.default.removeItem(at: thumbURL)
             } else {
                 recordIssueState()
+                retainFileOnDisk = true
                 
                 for (issue, score, engine) in issuesFound {
                     await StreamController.shared.insertVideoLog(
@@ -469,16 +491,16 @@ actor LiveStreamService {
                         issueType: issue,
                         issueScore: score,
                         analysisEngine: engine,
-                        thumbnailPath: thumbURL.lastPathComponent
+                        thumbnailPath: savedThumbPath != nil ? URL(fileURLWithPath: savedThumbPath!).lastPathComponent : nil
                     )
                 }
             }
             
-            await ExtractionProgress.shared.set(status: "extracting", current: frameCount, total: 0, for: sessionName)
+            if !retainFileOnDisk {
+                try? FileManager.default.removeItem(at: thumbURL)
+            }
             
-        } catch {
-            appLogger.error("LiveStreamService: processing error: \(error, privacy: .public)")
-        }
+            await ExtractionProgress.shared.set(status: "extracting", current: frameCount, total: 0, for: sessionName)
     }
     
     // Removed updateVideoView and updateAudioView methods

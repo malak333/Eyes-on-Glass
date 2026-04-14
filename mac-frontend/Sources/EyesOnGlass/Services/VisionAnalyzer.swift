@@ -220,8 +220,12 @@ struct VisionAnalyzer: Sendable {
     static func analyze(imagePath: String) -> ValidationMetrics? {
         let uiImageURL = URL(fileURLWithPath: imagePath)
         let context = CIContext(options: [.cacheIntermediates: false])
-        guard let ciImage = CIImage(contentsOf: uiImageURL),
-              let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        guard let ciImage = CIImage(contentsOf: uiImageURL) else { return nil }
+        return analyze(ciImage: ciImage, context: context)
+    }
+    
+    static func analyze(ciImage: CIImage, context: CIContext) -> ValidationMetrics? {
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
         return analyze(cgImage: cgImage)
     }
 }

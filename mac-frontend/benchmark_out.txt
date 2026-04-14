@@ -1,0 +1,195 @@
+Building for debugging...
+[0/4] Write swift-version--58304C5D6DBC2206.txt
+Build complete! (0.25s)
+Test Suite 'Selected tests' started at 2026-04-13 21:21:58.118.
+Test Suite 'EyesOnGlassPackageTests.xctest' started at 2026-04-13 21:21:58.119.
+Test Suite 'BatteryIntegrationTests' started at 2026-04-13 21:21:58.119.
+Test Case '-[EyesOnGlassTests.BatteryIntegrationTests testBatteryAssets]' started.
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+[h264 @ 0x8a540c380] non-existing PPS 0 referenced
+    Last message repeated 1 times
+[h264 @ 0x8a540c380] no frame!
+Test Case '-[EyesOnGlassTests.BatteryIntegrationTests testBatteryAssets]' passed (32.573 seconds).
+Test Suite 'BatteryIntegrationTests' passed at 2026-04-13 21:22:30.692.
+	 Executed 1 test, with 0 failures (0 unexpected) in 32.573 (32.573) seconds
+Test Suite 'EyesOnGlassPackageTests.xctest' passed at 2026-04-13 21:22:30.692.
+	 Executed 1 test, with 0 failures (0 unexpected) in 32.573 (32.573) seconds
+Test Suite 'Selected tests' passed at 2026-04-13 21:22:30.692.
+	 Executed 1 test, with 0 failures (0 unexpected) in 32.573 (32.574) seconds
+◇ Test run started.
+↳ Testing Library Version: 1743
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

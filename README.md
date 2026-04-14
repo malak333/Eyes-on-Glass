@@ -25,8 +25,8 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
 
 3. **Analysis Engine (Hybrid VLM Pipeline & Gemma 4 E4B)**:
    - To optimize extreme performance, the application implements a **Hybrid VLM Pipeline** pairing classical computer vision heuristics natively with State-of-the-Art Generative AI.
-   - **OpenCV Junior Pre-Filter**: Streams frames concurrently via standard Swift `Actor` execution loops. Fast heuristics (like Laplacian variance and blockiness calculations) actively monitor stream health without invoking the LLM, flagging potentially anomalous frames cheaply.
-   - **Hardware-Accelerated Ring Buffer**: A persistent 30-frame visual trail is dynamically maintained in memory. To minimize overhead, raw `CVPixelBuffer` frames are synchronously encoded into HEIC (High-Efficiency Image Container) formats utilizing Apple's M4/M5 hardware Media Engine.
+   - **OpenCV Junior Pre-Filter**: Streams frames concurrently via standard Swift `Actor` execution loops. Fast heuristics (like Laplacian variance and blockiness calculations) actively monitor stream health without invoking the LLM. This filter executes natively against Apple's unified memory (zero-copy via `vImage`), completely bypassing SSD disk I/O unless an anomaly dictates a persistent flush.
+   - **Hardware-Accelerated Ring Buffer**: A persistent 30-frame visual trail is dynamically maintained in memory. To minimize overhead and dramatically scale throughput, raw `CVPixelBuffer` frames are synchronously encoded into HEIC (High-Efficiency Image Container) formats utilizing Apple's M4/M5 hardware Media Engine. When an anomaly is identified, these highly-compressed HEIC bytes are securely flushed directly to disk without any secondary, redundant JPEG software trans-coding (completely eliminating "Synchronous Dual Image Compression").
    - **Gemma 4 "Senior Engineer" Validations**: Only when the OpenCV Pre-Filter exceeds explicit variance thresholds is the **Native AI Analyzer** triggered. An exclusive `mlx-swift` ChatSession pipeline interfaces with the dense `Gemma 4 E4B` tier (running natively in Unified Memory via Hugging Face Hub downloads) to thoroughly inspect the frame, evaluating whether the identified artifacts correctly represent genuine broadcast anomalies.
    - **Stateless Zero-Shot Inference**: To completely eliminate ambient GPU and Core processing overhead, the VLM operates entirely on-demand. Background cache polling has been disabled. When OpenCV escalates a potential incident, the Native VLM instantly reconstructs its MLX context utilizing raw snapshot frames directly from the hardware HEIC ring buffer. This enforces a strict zero-shot architectural boundary, preventing any hallucinated context leakage between isolated broadcast corruptions.
 
@@ -102,6 +102,16 @@ cd mac-frontend
 swift test
 ```
 Or use the native `Cmd + U` shortcut directly within Xcode.
+
+### 5. UDP Throughput Load Testing
+
+For benchmarking the absolute multi-core boundaries of Apple Silicon, we run a native, pace-limited UDP localhost load test. This `LiveMulticastLoadTest` executes directly against the `UDPIngestor` actor using Apple's `Network.framework` to determine raw `MB/sec` capacity metrics of the native extraction engine:
+
+```bash
+cd mac-frontend
+swift test --filter LiveMulticastLoadTest
+cat /tmp/live_multicast_result.txt
+```
 
 ---
 
