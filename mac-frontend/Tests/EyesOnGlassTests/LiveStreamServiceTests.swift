@@ -6,7 +6,7 @@ final class LiveStreamServiceTests: XCTestCase {
     
     // Validates that explosive frame throughput out of UDPIngestor doesn't crash the LiveStreamService actor state
     func testLiveStreamServiceRenderingVelocity() async {
-        let service = LiveStreamService.shared
+        let service = LiveStreamService(streamController: nil)
         
         // Ensure starting clean
         await service.stopMonitoring()
@@ -21,8 +21,8 @@ final class LiveStreamServiceTests: XCTestCase {
         for _ in 0..<300 {
             // Dispatch asynchronously to emulate rapid-fire actor isolation pushes
             Task {
-                UIVisualsRenderer.shared.render(pixelBuffer: dummyPixelBuffer)
-                UIVisualsRenderer.shared.render(waveform: [0.0], vectorscope: [.zero], phase: [0.0], levels: [0.0])
+                UIVisualsRenderer(streamController: nil).render(pixelBuffer: dummyPixelBuffer)
+                UIVisualsRenderer(streamController: nil).render(waveform: [0.0], vectorscope: [.zero], phase: [0.0], levels: [0.0])
             }
         }
         

@@ -1,11 +1,14 @@
 import Foundation
 import CoreVideo
 import Network
+import Darwin
 
 public actor UDPIngestor {
     private var connectionGroup: NWConnectionGroup?
     private var listener: NWListener?
     private var isActive = false
+    private var bsdSocketFD: Int32 = -1
+    private var bsdSocketTask: Task<Void, Never>?
     
     // Pipeline components
     private let demuxer = TSDemuxer()
@@ -112,6 +115,13 @@ public actor UDPIngestor {
         listener?.cancel()
         listener = nil
         
+        if bsdSocketFD != -1 {
+            Darwin.close(bsdSocketFD)
+            bsdSocketFD = -1
+        }
+        bsdSocketTask?.cancel()
+        bsdSocketTask = nil
+        
         heartbeatTask?.cancel()
         streamContinuation?.finish()
         processingTask?.cancel()
@@ -163,24 +173,76 @@ public actor UDPIngestor {
         let targetPort = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(integerLiteral: 1234)
         
         if isMulticast {
-            guard let ipv4 = IPv4Address(host) else {
-                print("UDPIngestor: Invalid IPv4 Multicast Host")
-                return
-            }
-            do {
-                let group = try NWMulticastGroup(for: [.hostPort(host: .ipv4(ipv4), port: targetPort)])
-                let groupConn = NWConnectionGroup(with: group, using: .udp)
-                groupConn.stateUpdateHandler = { state in
-                    if case .ready = state { print("UDPIngestor: Joined Multicast Group \(uri) natively") }
+            print("UDPIngestor: Joined Multicast Group \(uri) natively via BSD Socket")
+            let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+            if fd >= 0 {
+                self.bsdSocketFD = fd
+                var reuse: Int32 = 1
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+                setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, socklen_t(MemoryLayout<Int32>.size))
+                
+                var rcvbuf: Int32 = 8 * 1024 * 1024 // 8MB buffer avoids packet drops at native level
+                setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, socklen_t(MemoryLayout<Int32>.size))
+                
+                var addr = sockaddr_in()
+                addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                addr.sin_family = sa_family_t(AF_INET)
+                addr.sin_port = port.bigEndian
+                addr.sin_addr.s_addr = INADDR_ANY.bigEndian
+                
+                let bindResult = withUnsafePointer(to: &addr) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                    }
                 }
-                groupConn.setReceiveHandler(maximumMessageSize: 65536, rejectOversizedMessages: false) { (message, content, isComplete) in
-                    guard let content = content else { return }
-                    continuation?.yield(Data(content))
+                
+                if bindResult >= 0 {
+                    var mreq = ip_mreq()
+                    inet_pton(AF_INET, host, &mreq.imr_multiaddr)
+                    mreq.imr_interface.s_addr = INADDR_ANY.bigEndian
+                    setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, socklen_t(MemoryLayout<ip_mreq>.size))
+                    
+                    let flags = fcntl(fd, F_GETFL)
+                    fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+                    
+                    self.bsdSocketTask = Task.detached(priority: .userInitiated) {
+                        let bufferSize = 65536
+                        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+                        defer { buffer.deallocate() }
+                        
+                        var batchData = Data()
+                        batchData.reserveCapacity(65536)
+                        
+                        while true {
+                            if Task.isCancelled { break }
+                            var readSomething = false
+                            while true {
+                                let bytesRead = recv(fd, buffer, bufferSize, 0)
+                                if bytesRead > 0 {
+                                    batchData.append(buffer, count: bytesRead)
+                                    readSomething = true
+                                    if batchData.count >= 65536 { break }
+                                } else {
+                                    break
+                                }
+                            }
+                            
+                            if batchData.count > 0 {
+                                continuation?.yield(batchData)
+                                batchData.removeAll(keepingCapacity: true)
+                            }
+                            
+                            if !readSomething {
+                                var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                                poll(&pfd, 1, 1000)
+                            }
+                        }
+                    }
+                } else {
+                    print("UDPIngestor: BSD Bind failed")
+                    Darwin.close(fd)
+                    self.bsdSocketFD = -1
                 }
-                groupConn.start(queue: .global(qos: .userInitiated))
-                self.connectionGroup = groupConn
-            } catch {
-                print("UDPIngestor: Multicast Group Error: \(error)")
             }
         } else {
             do {
@@ -301,12 +363,18 @@ public actor UDPIngestor {
                         self.isStreamLost = true
                         self.onStreamLostCallback?()
                     }
-                    if self.connectionGroup != nil || self.listener != nil {
+                    if self.connectionGroup != nil || self.listener != nil || self.bsdSocketFD != -1 {
                         print("UDPIngestor: Heartbeat timeout on \(uri). Resetting connection...")
                         self.connectionGroup?.cancel()
                         self.connectionGroup = nil
                         self.listener?.cancel()
                         self.listener = nil
+                        if self.bsdSocketFD != -1 {
+                            Darwin.close(self.bsdSocketFD)
+                            self.bsdSocketFD = -1
+                        }
+                        self.bsdSocketTask?.cancel()
+                        self.bsdSocketTask = nil
                         await self.connect(uri: uri)
                     }
                 }

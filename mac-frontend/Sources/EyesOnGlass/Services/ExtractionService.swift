@@ -378,7 +378,7 @@ struct ExtractionService: Sendable {
         return framesToAnalyze
     }
 
-    static func extractAndAnalyze(filename: String, ) async {
+    static func extractAndAnalyze(filename: String, streamController: StreamController) async {
         appLogger.info("Started native AVFoundation extraction for \(filename)")
         let uploadsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("EyesOnGlass/Uploads/")
         try? FileManager.default.createDirectory(at: uploadsDir, withIntermediateDirectories: true)
@@ -615,7 +615,7 @@ struct ExtractionService: Sendable {
         finalLogsToSave.sort { $0.timestampSec < $1.timestampSec }
         
         for log in finalLogsToSave {
-            await StreamController.shared.insertVideoLog(
+            await streamController.insertVideoLog(
                 videoFilename: log.videoFilename,
                 timestampSec: log.timestampSec,
                 nodeSource: log.nodeSource,
@@ -639,7 +639,7 @@ struct ExtractionService: Sendable {
                 return false
             }
             let defaultEngine = ExtractionService.determineDefaultEngine(isVlmReady: isVlmReady, tierName: tier.displayName)
-            await StreamController.shared.insertVideoLog(
+            await streamController.insertVideoLog(
                 videoFilename: filename,
                 timestampSec: 0.0,
                 nodeSource: "Primary-Ingest-A",

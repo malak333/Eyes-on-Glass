@@ -136,8 +136,8 @@ final class AudioDecoderTests: XCTestCase {
 
     @MainActor
     func testUDPIntegrationWithAppEngine() async throws {
-        let service = LiveStreamService.shared
-        let controller = StreamController.shared
+        let service = LiveStreamService(streamController: nil)
+        let controller = StreamController()
         
         controller.isAdvancedInspectorVisible = true
         

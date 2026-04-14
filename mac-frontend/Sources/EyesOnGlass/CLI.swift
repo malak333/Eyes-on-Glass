@@ -18,9 +18,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     }
     
     // Inject the isolated context into the StreamController so offline background extractions are preserved
-    await MainActor.run {
-        StreamController.shared.modelContext = container.mainContext
-    }
+    
     
     let fm = FileManager.default
     guard fm.fileExists(atPath: baseDirectory) else {
@@ -35,9 +33,15 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     try? fm.createDirectory(at: uploadsDir, withIntermediateDirectories: true)
     
     do {
-        var videoFiles = ["CIRCLE TS_2020_05_03_15_29_00_078.mp4"]
+        let videoFiles = ["CIRCLE TS_2020_05_03_15_29_00_078.mp4"]
         var resultsDict = [String: Any]()
         let executionTiers: [GemmaModelTier] = [.e4b]
+        
+        let offlineStreamController = await MainActor.run { 
+            let ctrl = StreamController()
+            ctrl.modelContext = container.mainContext
+            return ctrl
+        }
         
         for tier in executionTiers {
             fputs("\n==================================\n", stderr)
@@ -74,7 +78,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                 NativeVLMClient.shared.resetContext()
                 
                 // Invoke real offline extraction framework bound to the VLM tier
-                await ExtractionService.extractAndAnalyze(filename: filename)
+                await ExtractionService.extractAndAnalyze(filename: filename, streamController: offlineStreamController)
                 
                 // Fetch logged results
                 let fetchDescriptor = FetchDescriptor<VideoLog>()

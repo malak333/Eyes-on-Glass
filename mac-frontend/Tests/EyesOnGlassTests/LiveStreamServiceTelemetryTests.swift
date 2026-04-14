@@ -17,7 +17,7 @@ final class LiveStreamServiceTelemetryTests: XCTestCase {
     
     // Explicitly verify the telemetry rate-limiting fallback integration handles async actor states correctly
     func testRecordIssueStateUpdatesTrackingLogic() async {
-        let service = LiveStreamService.shared
+        let service = LiveStreamService(streamController: nil)
         
         // This exercises the `isPendingRecovery` and `lastIssueEncounteredTime` buffer overrides.
         // Even though these specific properties are structurally strictly isolated (private),

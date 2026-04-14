@@ -60,9 +60,9 @@ final class BatteryIntegrationTests: XCTestCase {
             let container = try ModelContainer(for: VideoLog.self, configurations: config)
             let context = container.mainContext
             // 4. Setup StreamController state
-            StreamController.shared.modelContext = context
-            StreamController.shared.currentSessionIdentifier = filename
-            StreamController.shared.currentSessionStartTime = Date()
+            StreamController().modelContext = context
+            StreamController().currentSessionIdentifier = filename
+            StreamController().currentSessionStartTime = Date()
             
             // 5. Stage file for ExtractionService
             let fileManager = FileManager.default
@@ -76,7 +76,7 @@ final class BatteryIntegrationTests: XCTestCase {
             try fileManager.copyItem(at: fileURL, to: destURL)
             
             // 6. Execute offline extraction synchronously
-            await ExtractionService.extractAndAnalyze(filename: filename)
+            await ExtractionService.extractAndAnalyze(filename: filename, streamController: StreamController())
             
             // 7. Database Interrogation
             let fetchDescriptor = FetchDescriptor<VideoLog>()

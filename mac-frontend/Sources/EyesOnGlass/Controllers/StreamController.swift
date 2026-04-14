@@ -5,8 +5,17 @@ import SwiftUI
 /// The primary bridge between the background hardware Actors and the SwiftUI Views.
 @Observable
 @MainActor
-final class StreamController {
-    static let shared = StreamController()
+final class StreamController: Identifiable, Hashable {
+    let id = UUID()
+    private(set) var liveStreamService: LiveStreamService!
+
+    nonisolated static func == (lhs: StreamController, rhs: StreamController) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    nonisolated func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
     var activeSessionName: String?
     var connectionStatus: String = "Disconnected"
     var hardwareCPU: Double = 0.0
@@ -78,7 +87,7 @@ final class StreamController {
         isMuted.toggle()
         let muteState = isMuted
         Task {
-            await LiveStreamService.shared.setMuted(muteState)
+            await self.liveStreamService.setMuted(muteState)
         }
     }
     
@@ -86,6 +95,8 @@ final class StreamController {
     var modelContext: ModelContext?
     
     init() {
+        self.liveStreamService = LiveStreamService(streamController: self)
+
         Task {
             await SystemMonitor.shared.start()
             while true {
@@ -106,7 +117,7 @@ final class StreamController {
                     avgGpu = windowStats.reduce(0.0) { $0 + $1.gpu } / Double(windowStats.count)
                 }
                 
-                let info = await LiveStreamService.shared.getStreamInfo()
+                let info = await self.liveStreamService.getStreamInfo()
                 
                 await MainActor.run {
                     self.videoPID = info.videoPID
@@ -208,14 +219,14 @@ final class StreamController {
         }
         
         // Dispatch to the native actor to boot the hardware session
-        await LiveStreamService.shared.startMonitoring(uri: uri, sessionName: sessionIdentifier)
-        await LiveStreamService.shared.setMuted(self.isMuted)
+        await self.liveStreamService.startMonitoring(uri: uri, sessionName: sessionIdentifier)
+        await self.liveStreamService.setMuted(self.isMuted)
         self.connectionStatus = "Active"
     }
     
     @MainActor
     func stopMonitoring() async {
-        await LiveStreamService.shared.stopMonitoring()
+        await self.liveStreamService.stopMonitoring()
         self.connectionStatus = "Disconnected"
         self.activeSessionName = nil
         

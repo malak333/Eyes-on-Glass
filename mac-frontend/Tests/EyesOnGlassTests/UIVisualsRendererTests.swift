@@ -4,9 +4,10 @@ import CoreVideo
 
 @MainActor
 final class UIVisualsRendererTests: XCTestCase {
+    var controller = StreamController()
     
     func testRenderVideoFrameIsThrottled() async throws {
-        let renderer = UIVisualsRenderer.shared
+        let renderer = UIVisualsRenderer(streamController: controller)
         
         let dummyPixelBuffer: CVPixelBuffer = {
             var pb: CVPixelBuffer?
@@ -15,8 +16,8 @@ final class UIVisualsRendererTests: XCTestCase {
             return pb!
         }()
         
-        StreamController.shared.isAdvancedInspectorVisible = true
-        StreamController.shared.currentFrameImage = nil
+        controller.isAdvancedInspectorVisible = true
+        controller.currentFrameImage = nil
         
         // Render first frame
         renderer.render(pixelBuffer: dummyPixelBuffer)
@@ -28,17 +29,17 @@ final class UIVisualsRendererTests: XCTestCase {
         // We only assert that no crash occurred and the dispatch queues handled the workload.
         XCTAssertTrue(true, "UIVisualsRenderer processed video frame without crashing")
         
-        StreamController.shared.isAdvancedInspectorVisible = false
+        controller.isAdvancedInspectorVisible = false
     }
     
     func testRenderAudioVisualsIsThrottled() async throws {
-        let renderer = UIVisualsRenderer.shared
+        let renderer = UIVisualsRenderer(streamController: controller)
         
-        StreamController.shared.isAdvancedInspectorVisible = true
-        StreamController.shared.audioWaveformData = []
-        StreamController.shared.audioVectorscopeData = []
-        StreamController.shared.audioPhaseData = []
-        StreamController.shared.audioLevelsData = []
+        controller.isAdvancedInspectorVisible = true
+        controller.audioWaveformData = []
+        controller.audioVectorscopeData = []
+        controller.audioPhaseData = []
+        controller.audioLevelsData = []
         
         let dummyWaveform: [Float] = [0.1, 0.2, 0.3]
         let dummyVectorscope: [CGPoint] = [CGPoint(x: 1, y: 1)]
@@ -51,11 +52,11 @@ final class UIVisualsRendererTests: XCTestCase {
         // Yield to allow async queue dispatches to process
         try await Task.sleep(nanoseconds: 50_000_000) 
         
-        XCTAssertEqual(StreamController.shared.audioWaveformData, dummyWaveform)
-        XCTAssertEqual(StreamController.shared.audioVectorscopeData, dummyVectorscope)
-        XCTAssertEqual(StreamController.shared.audioPhaseData, dummyPhase)
-        XCTAssertEqual(StreamController.shared.audioLevelsData, dummyLevels)
+        XCTAssertEqual(controller.audioWaveformData, dummyWaveform)
+        XCTAssertEqual(controller.audioVectorscopeData, dummyVectorscope)
+        XCTAssertEqual(controller.audioPhaseData, dummyPhase)
+        XCTAssertEqual(controller.audioLevelsData, dummyLevels)
         
-        StreamController.shared.isAdvancedInspectorVisible = false
+        controller.isAdvancedInspectorVisible = false
     }
 }

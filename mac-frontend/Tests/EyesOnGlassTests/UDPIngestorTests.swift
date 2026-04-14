@@ -41,7 +41,7 @@ final class UDPIngestorTests: XCTestCase {
         // we omit waiting for the expectation here but validate the signature logic built.
     }
     
-    func testNetworkFrameworkMulticastSetup() async {
+    func testBSDSocketMulticastSetup() async {
         let ingestor = UDPIngestor()
         
         // Simulating the start function execution over a standard Multicast UDP IP mapping
@@ -53,7 +53,7 @@ final class UDPIngestorTests: XCTestCase {
             onPacket: { _ in }
         )
         
-        // This validates that our `NWConnectionGroup` code branch properly triggers
+        // This validates that our POSIX BSD socket branching natively triggers `socket()`
         // without crashing standard execution bounds on internal loops. To comprehensively test
         // the network pipeline natively blocking, we assert that the stop successfully cleanly dismantles.
         

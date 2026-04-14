@@ -7,7 +7,12 @@ import SwiftUI
 import AppKit
 
 class UIVisualsRenderer: @unchecked Sendable {
-    static let shared = UIVisualsRenderer()
+    private weak var streamController: StreamController?
+
+    init(streamController: StreamController?) {
+        self.streamController = streamController
+    }
+
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private var isRenderingVideo = false
     private let videoQueue = DispatchQueue(label: "com.eyesonGlass.uiVideoRenderer")
@@ -25,13 +30,13 @@ class UIVisualsRenderer: @unchecked Sendable {
             self.isRenderingVideo = true
             
             Task {
-                let isVisible = await MainActor.run { StreamController.shared.isAdvancedInspectorVisible }
+                let isVisible = await MainActor.run { self.streamController?.isAdvancedInspectorVisible == true }
                 if isVisible {
                     let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
                     if let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
                         let nsImage = NSImage(cgImage: cgImage, size: ciImage.extent.size)
                         await MainActor.run {
-                            StreamController.shared.currentFrameImage = Image(nsImage: nsImage)
+                            self.streamController?.currentFrameImage = Image(nsImage: nsImage)
                         }
                     }
                 }
@@ -52,13 +57,13 @@ class UIVisualsRenderer: @unchecked Sendable {
             self.isRenderingAudio = true
             
             Task {
-                let isVisible = await MainActor.run { StreamController.shared.isAdvancedInspectorVisible }
+                let isVisible = await MainActor.run { self.streamController?.isAdvancedInspectorVisible == true }
                 if isVisible {
                     await MainActor.run {
-                        StreamController.shared.audioWaveformData = waveform
-                        StreamController.shared.audioVectorscopeData = vectorscope
-                        StreamController.shared.audioPhaseData = phase
-                        StreamController.shared.audioLevelsData = levels
+                        self.streamController?.audioWaveformData = waveform
+                        self.streamController?.audioVectorscopeData = vectorscope
+                        self.streamController?.audioPhaseData = phase
+                        self.streamController?.audioLevelsData = levels
                     }
                 }
                 
@@ -72,7 +77,13 @@ class UIVisualsRenderer: @unchecked Sendable {
 }
 
 actor LiveStreamService {
-    static let shared = LiveStreamService()
+    private weak var streamController: StreamController?
+    private let visualsRenderer: UIVisualsRenderer
+
+    init(streamController: StreamController?) {
+        self.streamController = streamController
+        self.visualsRenderer = UIVisualsRenderer(streamController: streamController)
+    }
     
     private var ingestor: UDPIngestor?
     private var isActive = false
@@ -151,22 +162,22 @@ actor LiveStreamService {
                     await self.processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
                 }
             }, onVideoFrame: { pixelBuffer in
-                UIVisualsRenderer.shared.render(pixelBuffer: pixelBuffer)
+                self.visualsRenderer.render(pixelBuffer: pixelBuffer)
             }, onAudioVisuals: { waveform, vectorscope, phase, levels in
-                UIVisualsRenderer.shared.render(waveform: waveform, vectorscope: vectorscope, phase: phase, levels: levels)
+                self.visualsRenderer.render(waveform: waveform, vectorscope: vectorscope, phase: phase, levels: levels)
             }, onPacket: { count in
                 Task(priority: .utility) {
                     await ExtractionProgress.shared.setPackets(count, for: sessionName)
                 }
             }, onCCError: {
                 Task(priority: .utility) {
-                    await StreamController.shared.incrementCCErrors()
+                    await self.streamController?.incrementCCErrors()
                 }
             }, onStreamLost: {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await StreamController.shared.insertVideoLog(
+                    await self.streamController?.insertVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -182,7 +193,7 @@ actor LiveStreamService {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await StreamController.shared.insertVideoLog(
+                    await self.streamController?.insertVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -198,7 +209,7 @@ actor LiveStreamService {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await StreamController.shared.insertVideoLog(
+                    await self.streamController?.insertVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -214,7 +225,7 @@ actor LiveStreamService {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await StreamController.shared.insertVideoLog(
+                    await self.streamController?.insertVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -263,7 +274,7 @@ actor LiveStreamService {
         
         if let previous = wasAudioHealthy {
             if previous && !isAudioHealthy {
-                await StreamController.shared.insertVideoLog(
+                await self.streamController?.insertVideoLog(
                     videoFilename: sessionName,
                     timestampSec: Double(currentFrameIndex),
                     nodeSource: "Live-Multicast",
@@ -275,7 +286,7 @@ actor LiveStreamService {
                     thumbnailPath: nil
                 )
             } else if !previous && isAudioHealthy {
-                await StreamController.shared.insertVideoLog(
+                await self.streamController?.insertVideoLog(
                     videoFilename: sessionName,
                     timestampSec: Double(currentFrameIndex),
                     nodeSource: "Live-Multicast",
@@ -424,7 +435,7 @@ actor LiveStreamService {
                     Task(priority: .utility) {
                         if let summary = await NativeVLMClient.shared.analyzeStageB(start: start, peak: peak, end: endPath, tier: tier) {
                             appLogger.info("Stage B incident report generated: \(summary)")
-                            await StreamController.shared.insertVideoLog(
+                            await self.streamController?.insertVideoLog(
                                 videoFilename: sessionBackup,
                                 timestampSec: Double(indexBackup),
                                 nodeSource: "VLM-Forensic",
@@ -463,7 +474,7 @@ actor LiveStreamService {
                     }
                     
                     if shouldLogOk {
-                        await StreamController.shared.insertVideoLog(
+                        await self.streamController?.insertVideoLog(
                             videoFilename: sessionName,
                             timestampSec: Double(currentFrameIndex),
                             nodeSource: "Live-Multicast",
@@ -482,7 +493,7 @@ actor LiveStreamService {
                 retainFileOnDisk = true
                 
                 for (issue, score, engine) in issuesFound {
-                    await StreamController.shared.insertVideoLog(
+                    await self.streamController?.insertVideoLog(
                         videoFilename: sessionName,
                         timestampSec: Double(currentFrameIndex),
                         nodeSource: "Live-Multicast",

@@ -68,8 +68,8 @@ public class H264Decoder {
         guard !nalPayload.isEmpty else { return }
         
         let nalType = nalPayload[0] & 0x1F
-        if nalType != 9 {
-             print("H264Decoder: Received NAL type \(nalType) (count: \(nalPayload.count)) PTS: \(pts)")
+        if nalType != 9 && nalType != 6 && nalType != 1 && nalType != 5 {
+             // print("H264Decoder: Received NAL type \(nalType) (count: \(nalPayload.count)) PTS: \(pts)")
         }
         
         if pts != currentFramePTS {
@@ -214,12 +214,6 @@ public class H264Decoder {
             return 
         }
         
-        let hasSlice = currentFrameNALs.contains { ($0[0] & 0x1F) == 1 || ($0[0] & 0x1F) == 5 }
-        guard hasSlice else {
-            print("H264Decoder: Skipping submission because no slices present (PTS: \(currentFramePTS))")
-            return
-        }
-        
         stateLock.lock()
         let dropSession = needsSessionDrop
         needsSessionDrop = false
@@ -227,7 +221,7 @@ public class H264Decoder {
         
         if dropSession {
             if let session = decompressionSession {
-                print("H264Decoder: Invalidating stuck VTDecompressionSession due to bad data (-8969)")
+                print("H264Decoder: Invalidating stuck VTDecompressionSession")
                 VTDecompressionSessionInvalidate(session)
                 decompressionSession = nil
             }
@@ -252,14 +246,6 @@ public class H264Decoder {
             }
         }
         
-        if isCurrentFrameSync {
-            if _currentGOPCount > 0 {
-                _lastGOPSize = _currentGOPCount
-            }
-            _currentGOPCount = 0
-        }
-        _currentGOPCount += 1
-        
         if decompressionSession == nil && formatDesc != nil {
             if isCurrentFrameSync {
                 createDecompressionSession()
@@ -269,6 +255,20 @@ public class H264Decoder {
                 return // Drop P-frames until sync
             }
         }
+        
+        let hasSlice = currentFrameNALs.contains { ($0[0] & 0x1F) == 1 || ($0[0] & 0x1F) == 5 }
+        guard hasSlice else {
+            print("H264Decoder: Skipping submission because no slices present (PTS: \(currentFramePTS))")
+            return
+        }
+        
+        if isCurrentFrameSync {
+            if _currentGOPCount > 0 {
+                _lastGOPSize = _currentGOPCount
+            }
+            _currentGOPCount = 0
+        }
+        _currentGOPCount += 1
         
         if isWaitingForSync && !isCurrentFrameSync {
             print("H264Decoder: Dropping P-Frame because isWaitingForSync is true (PTS: \(currentFramePTS))")
@@ -343,16 +343,15 @@ public class H264Decoder {
             frameRefcon: nil, infoFlagsOut: &flagsOut
         )
         if isCurrentFrameSync {
-            print("H264Decoder: Submitted IDR frame to VT (PTS: \(currentFramePTS), DTS: \(actualDTS))")
+            // print("H264Decoder: Submitted IDR frame to VT (PTS: \(currentFramePTS), DTS: \(actualDTS))")
         } else {
-            print("H264Decoder: Submitted P/B frame to VT (PTS: \(currentFramePTS), DTS: \(actualDTS))")
+            // print("H264Decoder: Submitted P/B frame to VT (PTS: \(currentFramePTS), DTS: \(actualDTS))")
         }
         
         if decodeStatus != noErr {
             if decodeStatus == kVTVideoDecoderBadDataErr || decodeStatus == -8969 {
-                stateLock.lock()
-                needsSessionDrop = true
-                stateLock.unlock()
+                // Ignore bad data and let VTDecompressionSession try to recover natively
+                // print("H264Decoder: Bad data error in decode frame (ignored)")
             } else {
                 print("H264Decoder: VT Decoder Error: \(decodeStatus)")
             }
@@ -365,11 +364,8 @@ public class H264Decoder {
         let decoder = Unmanaged<H264Decoder>.fromOpaque(decompressionOutputRefCon!).takeUnretainedValue()
         
         if status != noErr {
-            print("H264Decoder: Callback returned error status \(status)")
-            if status == kVTVideoDecoderBadDataErr || status == -8969 {
-                decoder.stateLock.lock()
-                decoder.needsSessionDrop = true
-                decoder.stateLock.unlock()
+            if status != kVTVideoDecoderBadDataErr && status != -8969 {
+                print("H264Decoder: Callback returned error status \(status)")
             }
         }
         

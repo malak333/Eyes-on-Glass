@@ -8,13 +8,20 @@ struct DashboardView: View {
     @Query(filter: #Predicate<VideoLog> { $0.isArchived == false }, sort: \VideoLog.timestampSec, order: .reverse) private var logs: [VideoLog]
     @State private var selectedLog: VideoLog?
     @State private var showAdvancedInspector: Bool = false
+    var activeLogs: [VideoLog] {
+        if let id = streamController.currentSessionIdentifier {
+            return logs.filter { $0.sessionIdentifier == id }
+        } else {
+            return []
+        }
+    }
         
     var body: some View {
         NavigationSplitView {
-            DashboardSidebar(streamController: streamController, modelContext: modelContext, logs: logs)
+            DashboardSidebar(streamController: streamController, modelContext: modelContext, logs: activeLogs)
         } detail: {
             Group {
-                if logs.isEmpty {
+                if activeLogs.isEmpty {
                     if streamController.connectionStatus == "Active" {
                         VStack(spacing: 16) {
                             ProgressView()
@@ -28,7 +35,7 @@ struct DashboardView: View {
                     }
                 } else {
                     List(selection: $selectedLog) {
-                        ForEach(logs) { log in
+                        ForEach(activeLogs) { log in
                             LogEventRow(log: log)
                                 .tag(log)
                         }
