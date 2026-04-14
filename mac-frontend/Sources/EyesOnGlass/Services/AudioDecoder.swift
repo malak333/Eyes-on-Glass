@@ -286,7 +286,7 @@ public class AudioDecoder {
             let b1 = audioResidue[offset+1]
             
             var frameLength = 0
-            var packetCount = 1
+            let packetCount = 1
             
             if codec == "AAC" && b0 == 0xFF && (b1 & 0xF6) == 0xF0 {
                 frameLength = ((Int(audioResidue[offset+3]) & 0x03) << 11) | (Int(audioResidue[offset+4]) << 3) | ((Int(audioResidue[offset+5]) & 0xE0) >> 5)
@@ -447,36 +447,41 @@ public class AudioDecoder {
         
         let channels = Int(pcmBuffer.format.channelCount)
         
-        // 1. Waveform (Mix to mono and decimate to 100 points)
-        var waveform: [Float] = []
-        let points = 100
-        let stride = max(1, frameLength / points)
-        
-        // 2. Vectorscope (L vs R, randomly sample 200 points to save rendering)
-        var vectorscope: [CGPoint] = []
-        var scopeCount = 0
-        
         let leftChannel = floatChannelData[0]
         let rightChannel = floatChannelData[channels > 1 ? 1 : 0]
+        
+        // 1. Waveform (Mix to mono and decimate to 100 points)
+        var monoFull = [Float](repeating: 0, count: frameLength)
+        if channels > 1 {
+            var half: Float = 0.5
+            vDSP_vasm(leftChannel, 1, rightChannel, 1, &half, &monoFull, 1, vDSP_Length(frameLength))
+        } else {
+            monoFull = Array(UnsafeBufferPointer(start: leftChannel, count: frameLength))
+        }
+        
+        let points = 100
+        let stride = max(1, frameLength / points)
+        var waveform: [Float] = []
+        waveform.reserveCapacity(points)
         
         for i in 0..<points {
             let idx = i * stride
             if idx < frameLength {
-                let left = leftChannel[idx]
-                let right = rightChannel[idx]
-                let mono = (left + right) / 2.0
-                waveform.append(mono)
+                waveform.append(monoFull[idx])
             }
         }
         
-        // Sample vectorscope broadly
-        let scopeStride = max(1, frameLength / 200)
-        for i in Swift.stride(from: 0, to: frameLength, by: scopeStride) {
-            let left = leftChannel[i]
-            let right = rightChannel[i]
-            vectorscope.append(CGPoint(x: CGFloat(left), y: CGFloat(right)))
-            scopeCount += 1
-            if scopeCount >= 200 { break }
+        // 2. Vectorscope (L vs R, sample 200 points to save rendering)
+        let scopePoints = 200
+        let scopeStride = max(1, frameLength / scopePoints)
+        var vectorscope: [CGPoint] = []
+        vectorscope.reserveCapacity(scopePoints)
+        
+        for i in 0..<scopePoints {
+            let idx = i * scopeStride
+            if idx < frameLength {
+                vectorscope.append(CGPoint(x: CGFloat(leftChannel[idx]), y: CGFloat(rightChannel[idx])))
+            }
         }
         
         // Audio Metrics: True Peak & Loudness (approx via RMS)

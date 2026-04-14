@@ -56,7 +56,7 @@ final class FastIntegrationTests: XCTestCase {
         
         let endTime = CFAbsoluteTimeGetCurrent()
         let elapsed = endTime - startTime
-        let mbProcessed = Double(testSize) / 1_000_000.0
+        let mbProcessed = Double(offset) / 1_000_000.0
         let mbPerSecond = mbProcessed / elapsed
         let streams20Mbps = mbPerSecond / 2.5 // 20 Mbps = 2.5 MB/s
         

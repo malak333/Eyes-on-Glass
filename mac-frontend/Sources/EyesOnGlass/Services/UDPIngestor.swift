@@ -1,9 +1,10 @@
 import Foundation
 import CoreVideo
+import Network
 
 public actor UDPIngestor {
-    private var socketFD: Int32 = -1
-    private var readSource: DispatchSourceRead?
+    private var connectionGroup: NWConnectionGroup?
+    private var listener: NWListener?
     private var isActive = false
     
     // Pipeline components
@@ -74,7 +75,7 @@ public actor UDPIngestor {
         
         await streamMonitor.setOnSynced { [weak self] frame, audio in
             guard let self = self else { return }
-            Task { await self.forwardFrame(frame, audio: audio) }
+            Task(priority: .userInitiated) { await self.forwardFrame(frame, audio: audio) }
         }
         
         let newBridge = IngestorBridge(
@@ -91,7 +92,7 @@ public actor UDPIngestor {
         let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
         self.streamContinuation = continuation
         
-        self.processingTask = Task {
+        self.processingTask = Task(priority: .userInitiated) {
             for await data in stream {
                 if Task.isCancelled || !self.isActive { break }
                 autoreleasepool {
@@ -106,14 +107,11 @@ public actor UDPIngestor {
     
     public func stop() {
         isActive = false
-        if let source = readSource {
-            source.cancel()
-            readSource = nil
-        }
-        if socketFD >= 0 {
-            close(socketFD)
-            socketFD = -1
-        }
+        connectionGroup?.cancel()
+        connectionGroup = nil
+        listener?.cancel()
+        listener = nil
+        
         heartbeatTask?.cancel()
         streamContinuation?.finish()
         processingTask?.cancel()
@@ -158,86 +156,64 @@ public actor UDPIngestor {
             return
         }
         
-        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-        guard fd >= 0 else {
-            print("UDPIngestor: Failed to create socket")
-            return
-        }
-        self.socketFD = fd
-        
-        var reuse: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, socklen_t(MemoryLayout<Int32>.size))
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-        
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        addr.sin_addr.s_addr = INADDR_ANY
-        
-        let bindResult = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        
-        guard bindResult >= 0 else {
-            print("UDPIngestor: Failed to bind socket")
-            close(fd)
-            self.socketFD = -1
-            return
-        }
-        
-        if isMulticast {
-            var mreq = ip_mreq()
-            mreq.imr_multiaddr.s_addr = inet_addr(host)
-            mreq.imr_interface.s_addr = INADDR_ANY
-            
-            let joinResult = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, socklen_t(MemoryLayout<ip_mreq>.size))
-            if joinResult < 0 {
-                print("UDPIngestor: Failed to join multicast group \(host)")
-            } else {
-                print("UDPIngestor: Joined Multicast Group \(uri)")
-            }
-        } else {
-            print("UDPIngestor: Listening on Unicast \(uri)")
-        }
-        
-        let flags = fcntl(fd, F_GETFL, 0)
-        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
-        
         self.lastPacketTime = Date().timeIntervalSince1970
         self.lastVideoTime = Date().timeIntervalSince1970
-        
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue.global(qos: .userInitiated))
         let continuation = self.streamContinuation
         
-        source.setEventHandler {
-            var buffer = [UInt8](repeating: 0, count: 65536)
-            var keepReading = true
-            while keepReading {
-                autoreleasepool {
-                    let bytesRead = recv(fd, &buffer, buffer.count, 0)
-                    if bytesRead > 0 {
-                        self.packetCount += 1
-                        if self.packetCount % 50 == 0 {
-                            self.onPacketCallback?(self.packetCount)
-                        }
-                        let data = Data(buffer.prefix(bytesRead))
-                        continuation?.yield(data)
-                    } else {
-                        keepReading = false
-                    }
+        let targetPort = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port(integerLiteral: 1234)
+        
+        if isMulticast {
+            guard let ipv4 = IPv4Address(host) else {
+                print("UDPIngestor: Invalid IPv4 Multicast Host")
+                return
+            }
+            do {
+                let group = try NWMulticastGroup(for: [.hostPort(host: .ipv4(ipv4), port: targetPort)])
+                let groupConn = NWConnectionGroup(with: group, using: .udp)
+                groupConn.stateUpdateHandler = { state in
+                    if case .ready = state { print("UDPIngestor: Joined Multicast Group \(uri) natively") }
                 }
+                groupConn.setReceiveHandler(maximumMessageSize: 65536, rejectOversizedMessages: false) { (message, content, isComplete) in
+                    guard let content = content else { return }
+                    continuation?.yield(Data(content))
+                }
+                groupConn.start(queue: .global(qos: .userInitiated))
+                self.connectionGroup = groupConn
+            } catch {
+                print("UDPIngestor: Multicast Group Error: \(error)")
+            }
+        } else {
+            do {
+                let listener = try NWListener(using: .udp, on: targetPort)
+                listener.stateUpdateHandler = { state in
+                    if case .ready = state { print("UDPIngestor: Listening on Unicast \(uri) natively") }
+                }
+                listener.newConnectionHandler = { [weak self] connection in
+                    connection.start(queue: .global(qos: .userInitiated))
+                    self?.receiveUnicast(connection: connection, continuation: continuation)
+                }
+                listener.start(queue: .global(qos: .userInitiated))
+                self.listener = listener
+            } catch {
+                print("UDPIngestor: Listener Error: \(error)")
             }
         }
-        source.resume()
-        self.readSource = source
+    }
+    
+    private nonisolated func receiveUnicast(connection: NWConnection, continuation: AsyncStream<Data>.Continuation?) {
+        connection.receiveMessage { (content, context, isComplete, error) in
+            if let content = content {
+                continuation?.yield(Data(content))
+            }
+            if error == nil {
+                self.receiveUnicast(connection: connection, continuation: continuation)
+            }
+        }
     }
     
     private func connectToFile(uri: String) async {
         guard let url = URL(string: uri) else { return }
-        print("UDPIngestor: Reading local offline file \\(uri)")
+        print("UDPIngestor: Reading local offline file \(uri)")
         
         self.lastPacketTime = Date().timeIntervalSince1970
         self.lastVideoTime = Date().timeIntervalSince1970
@@ -276,6 +252,10 @@ public actor UDPIngestor {
     
     private func handleData(_ data: Data) {
         lastPacketTime = Date().timeIntervalSince1970
+        packetCount += 1
+        if packetCount % 50 == 0 {
+            onPacketCallback?(packetCount)
+        }
         if isStreamLost {
             isStreamLost = false
             onStreamRestoredCallback?()
@@ -303,7 +283,7 @@ public actor UDPIngestor {
     }
     
     private func startHeartbeat(uri: String) {
-        heartbeatTask = Task {
+        heartbeatTask = Task(priority: .utility) {
             while isActive {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 if Task.isCancelled { break }
@@ -321,14 +301,12 @@ public actor UDPIngestor {
                         self.isStreamLost = true
                         self.onStreamLostCallback?()
                     }
-                    if self.socketFD >= 0 {
+                    if self.connectionGroup != nil || self.listener != nil {
                         print("UDPIngestor: Heartbeat timeout on \(uri). Resetting connection...")
-                        if let source = self.readSource {
-                            source.cancel()
-                            self.readSource = nil
-                        }
-                        close(self.socketFD)
-                        self.socketFD = -1
+                        self.connectionGroup?.cancel()
+                        self.connectionGroup = nil
+                        self.listener?.cancel()
+                        self.listener = nil
                         await self.connect(uri: uri)
                     }
                 }
@@ -369,21 +347,21 @@ fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
     
     func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer, pts: Int64) {
         onVideoFrame?(frame)
-        Task {
+        Task(priority: .userInitiated) {
             let video = VideoHealth(frame: frame)
             await monitor.report(pts: pts, video: video, audio: nil)
         }
     }
     
     func decoder(_ decoder: AudioDecoder, didDecodeHealth health: AudioHealth, pts: Int64) {
-        Task {
+        Task(priority: .userInitiated) {
             await monitor.report(pts: pts, video: nil, audio: health)
         }
     }
     
     func decoder(_ decoder: AudioDecoder, didDecodeVisuals waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
         onAudioVisuals?(waveform, vectorscope, phase, levels)
-        Task {
+        Task(priority: .userInitiated) {
             await actor?.updateAudioVisuals(waveform: waveform, vectorscope: vectorscope, phase: phase, levels: levels)
         }
     }

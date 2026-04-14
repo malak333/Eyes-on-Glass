@@ -85,15 +85,15 @@ public class H264Decoder {
         switch nalType {
         case 7:
             let data = Data(nalPayload)
-            if !spsCollection.contains(data) {
-                spsCollection.append(data)
+            if spsCollection.isEmpty || spsCollection[0] != data {
+                spsCollection = [data]
                 needsFormatDescUpdate = true
             }
             isCurrentFrameSync = true
         case 8:
             let data = Data(nalPayload)
-            if !ppsCollection.contains(data) {
-                ppsCollection.append(data)
+            if ppsCollection.isEmpty || ppsCollection[0] != data {
+                ppsCollection = [data]
                 needsFormatDescUpdate = true
             }
             isCurrentFrameSync = true
@@ -235,9 +235,18 @@ public class H264Decoder {
         }
         
         if formatDesc == nil || needsFormatDescUpdate {
-            print("H264Decoder: Updating format description from SPS/PPS")
+            // print("H264Decoder: Updating format description from SPS/PPS")
             createFormatDescription()
             needsFormatDescUpdate = false
+            
+            if let format = formatDesc, let session = decompressionSession {
+                if !VTDecompressionSessionCanAcceptFormatDescription(session, formatDescription: format) {
+                    print("H264Decoder: VTDecompressionSession rejected new FormatDesc. Invalidating.")
+                    VTDecompressionSessionInvalidate(session)
+                    decompressionSession = nil
+                }
+            }
+            
             if decompressionSession == nil {
                 isWaitingForSync = true
             }

@@ -105,7 +105,7 @@ actor LiveStreamService {
         guard let data = visualRingBuffer.first, let ciImage = CIImage(data: data) else { return nil }
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         guard let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) else { return nil }
-        let url = thumbnailsDir.appendingPathComponent("live_prior_\\(UUID().uuidString).jpg")
+        let url = thumbnailsDir.appendingPathComponent("live_prior_\(UUID().uuidString).jpg")
         try? jpegData.write(to: url)
         return url.path
     }
@@ -147,9 +147,9 @@ actor LiveStreamService {
         let newIngestor = UDPIngestor()
         self.ingestor = newIngestor
         
-        Task {
+        Task(priority: .userInitiated) {
             await newIngestor.start(uri: uri, onFrame: { pixelBuffer, audioHealth in
-                Task {
+                Task(priority: .userInitiated) {
                     await self.processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
                 }
             }, onVideoFrame: { pixelBuffer in
@@ -157,16 +157,16 @@ actor LiveStreamService {
             }, onAudioVisuals: { waveform, vectorscope, phase, levels in
                 UIVisualsRenderer.shared.render(waveform: waveform, vectorscope: vectorscope, phase: phase, levels: levels)
             }, onPacket: { count in
-                Task {
+                Task(priority: .utility) {
                     await ExtractionProgress.shared.setPackets(count, for: sessionName)
                 }
             }, onCCError: {
-                Task {
+                Task(priority: .utility) {
                     await StreamController.shared.incrementCCErrors()
                 }
             }, onStreamLost: {
-                Task {
-                    await self.recordIssueState()
+                Task(priority: .utility) {
+                    self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -181,8 +181,8 @@ actor LiveStreamService {
                     )
                 }
             }, onStreamRestored: {
-                Task {
-                    await self.recordIssueState()
+                Task(priority: .utility) {
+                    self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -197,8 +197,8 @@ actor LiveStreamService {
                     )
                 }
             }, onVideoLost: {
-                Task {
-                    await self.recordIssueState()
+                Task(priority: .utility) {
+                    self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -213,8 +213,8 @@ actor LiveStreamService {
                     )
                 }
             }, onVideoRestored: {
-                Task {
-                    await self.recordIssueState()
+                Task(priority: .utility) {
+                    self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -307,22 +307,20 @@ actor LiveStreamService {
         guard let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) else { return }
         
         let frameID = UUID().uuidString
-        let thumbURL = thumbnailsDir.appendingPathComponent("live_\\(frameID).jpg")
+        let thumbURL = thumbnailsDir.appendingPathComponent("live_\(frameID).jpg")
         
         do {
             try jpegData.write(to: thumbURL)
             
             let cvResults = VisionAnalyzer.analyze(imagePath: thumbURL.path)
             var issuesFound: [(String, Double, String)] = []
-            var videoIssueFound = false
             
             if let cv = cvResults {
                 if cv.isBlackScreen {
                     issuesFound.append(("black_screen", 1.0, "opencv"))
-                    videoIssueFound = true
                 } else {
-                    if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")); videoIssueFound = true }
-                    if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")); videoIssueFound = true }
+                    if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")) }
+                    if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")) }
                     let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
                     appLogger.info("LiveStreamService MB Check - Frame \\(currentFrameIndex): blockiness=\\(cv.blockiness), variance=\\(cv.laplacianVariance), conf=\\(macroConfidence)")
                     if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
@@ -355,7 +353,6 @@ actor LiveStreamService {
                                     
                                     if isVerified {
                                         issuesFound.append(("🔴 Potential Macroblocking Detected (Initial Check)", Double(macroConfidence), tier.displayName))
-                                        videoIssueFound = true
                                     } else {
                                         startOfIncidentPath = nil
                                         peakMacroblockingFramePath = nil
@@ -377,15 +374,13 @@ actor LiveStreamService {
                             
                             if isCurrentMBSeriesVerified {
                                 issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine))
-                                videoIssueFound = true
                             } else if isStageAVerifying {
                                 issuesFound.append(("macroblocking_verifying", Double(macroConfidence), "Verifying..."))
-                                videoIssueFound = true
                             }
                         }
                     }
                     if cv.hasTopArtifact {
-                        issuesFound.append(("top_artifact", 1.0, "opencv")); videoIssueFound = true
+                        issuesFound.append(("top_artifact", 1.0, "opencv"))
                     }
                 }
             }
@@ -403,7 +398,7 @@ actor LiveStreamService {
                     startOfIncidentPath = nil
                     peakMacroblockingFramePath = nil
                     
-                    Task {
+                    Task(priority: .utility) {
                         if let summary = await NativeVLMClient.shared.analyzeStageB(start: start, peak: peak, end: endPath, tier: tier) {
                             appLogger.info("Stage B incident report generated: \(summary)")
                             await StreamController.shared.insertVideoLog(
