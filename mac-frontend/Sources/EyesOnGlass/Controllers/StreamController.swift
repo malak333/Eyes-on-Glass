@@ -26,7 +26,7 @@ final class StreamController: Identifiable, Hashable {
     var selectedTimeframe: String = "1m"
     var currentSessionIdentifier: String?
     var currentSessionStartTime: Date?
-    @ObservationIgnored let videoFrameSubject = PassthroughSubject<CVPixelBuffer, Never>()
+    @ObservationIgnored nonisolated let videoFrameSubject = PassthroughSubject<CVPixelBuffer, Never>()
     var videoPID: UInt16? = nil
     var audioPID: UInt16? = nil
     var videoResolution: CGSize? = nil

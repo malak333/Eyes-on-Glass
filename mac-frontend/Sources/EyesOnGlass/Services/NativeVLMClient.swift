@@ -135,7 +135,7 @@ public final class NativeVLMClient {
         case .e4b: requiredMemory = 6_000_000_000
         }
         
-        let availableMemory = UInt64(100_000_000_000) 
+        let availableMemory = ProcessInfo.processInfo.physicalMemory
         if availableMemory < requiredMemory {
             self.state = .error("Insufficient Unified Memory for \(tier.displayName)")
             return
@@ -302,7 +302,7 @@ public final class NativeVLMClient {
     }
     
     public static func normalizeAnomalyType(_ type: String) -> String {
-        var newType = type.lowercased().replacingOccurrences(of: " ", with: "_")
+        let newType = type.lowercased().replacingOccurrences(of: " ", with: "_")
         if newType.contains("slate") { return "slate" }
         if newType.contains("bars") { return "bars_and_tone" }
         if newType.contains("frozen") { return "frozen_screen" }

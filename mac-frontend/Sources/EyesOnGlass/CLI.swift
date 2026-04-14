@@ -33,7 +33,8 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     try? fm.createDirectory(at: uploadsDir, withIntermediateDirectories: true)
     
     do {
-        let videoFiles = ["CIRCLE TS_2020_05_03_15_29_00_078.mp4"]
+        let contents = (try? fm.contentsOfDirectory(atPath: baseDirectory)) ?? []
+        let videoFiles = contents.filter { $0.hasSuffix(".mp4") || $0.hasSuffix(".ts") || $0.hasSuffix(".mkv") }.sorted()
         var resultsDict = [String: Any]()
         let executionTiers: [GemmaModelTier] = [.e4b]
         

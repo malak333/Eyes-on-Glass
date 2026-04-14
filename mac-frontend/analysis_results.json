@@ -1,4 +1,25 @@
 {
+  "KGO-VOD-Encoder.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "black_screen",
+      "no_audio",
+      "static_audio"
+    ]
+  },
+  "ABCNHOU_KTRK_AUDIO_DROP_0427PMET.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "CC4Sencore.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "black_screen",
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
+    ]
+  },
   "CIRCLE TS_2020_05_03_15_29_00_078.mp4" : {
     "mlx-community\/gemma-4-e4b-it-4bit" : [
       "macroblocking",
