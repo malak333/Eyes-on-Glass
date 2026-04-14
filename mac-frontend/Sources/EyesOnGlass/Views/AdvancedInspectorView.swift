@@ -76,7 +76,8 @@ struct AdvancedInspectorView: View {
                             ("TS Clock", streamController.tsClock ?? "-"),
                             ("RX Rate", streamController.streamBitrate > 0 ? String(format: "%.2f mbps", streamController.streamBitrate) : "-"),
                             ("PCR Jitter", streamController.pcrJitter != nil ? String(format: "%.2f ms", streamController.pcrJitter!) : "-"),
-                            ("PCR Interval", streamController.pcrInterval != nil ? String(format: "%.2f ms", streamController.pcrInterval!) : "-")
+                            ("PCR Interval", streamController.pcrInterval != nil ? String(format: "%.2f ms", streamController.pcrInterval!) : "-"),
+                            ("IAT", streamController.currentIAT != nil ? String(format: "%.1f ms", streamController.currentIAT!) : "-")
                         ])
                         
                         // Simulated Error Blocks
@@ -110,42 +111,44 @@ struct AdvancedInspectorView: View {
             Spacer(minLength: 20)
             
             // Bottom Section: Visualizers
-            HStack(spacing: 16) {
-                // Waveform
-                VisualizerBox(title: "Waveform") {
-                    ZStack {
-                        VerticalScaleOverlay(topLabel: "+1.0", bottomLabel: "-1.0")
-                        realWaveform()
-                    }
-                }
-                
-                // Histogram / Spectrum
-                VisualizerBox(title: "Spectrum") {
-                    ZStack {
-                        VerticalScaleOverlay(topLabel: "IN (+1)", bottomLabel: "OUT (-1)")
-                        realAudioPhase()
-                    }
-                }
-                
-                // Vectorscope
-                VisualizerBox(title: "Vectorscope") {
-                    ZStack {
-                        VectorscopeGridOverlay()
-                        realVectorscope()
-                    }
-                }
-                
+            VStack(spacing: 16) {
                 // Audio Bars
-                VisualizerBox(title: "Audio Levels") {
+                VisualizerBox(title: "Audio Levels (16 Channels)") {
                     ZStack {
                         AudioDecibelGridOverlay()
                         AudioBarsView(audioLevels: streamController.audioLevelsData)
                     }
                 }
+                
+                HStack(spacing: 16) {
+                    // Waveform
+                    VisualizerBox(title: "Waveform") {
+                        ZStack {
+                            VerticalScaleOverlay(topLabel: "+1.0", bottomLabel: "-1.0")
+                            realWaveform()
+                        }
+                    }
+                    
+                    // Histogram / Spectrum
+                    VisualizerBox(title: "Spectrum") {
+                        ZStack {
+                            VerticalScaleOverlay(topLabel: "IN (+1)", bottomLabel: "OUT (-1)")
+                            realAudioPhase()
+                        }
+                    }
+                    
+                    // Vectorscope
+                    VisualizerBox(title: "Vectorscope") {
+                        ZStack {
+                            VectorscopeGridOverlay()
+                            realVectorscope()
+                        }
+                    }
+                }
             }
             .padding(.horizontal)
             .padding(.bottom)
-            .frame(height: 200)
+            .frame(height: 280)
         }
         .background(Color.black)
         .frame(minWidth: 500)

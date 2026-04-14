@@ -227,4 +227,25 @@ final class AudioDecoderTests: XCTestCase {
             XCTFail("Failed to extract visuals")
         }
     }
+    func testAudioDecoderADTSHeaderStripping() {
+        let decoder = AudioDecoder()
+        let delegate = MockAudioDecoderDelegate()
+        decoder.delegate = delegate
+        decoder.audioCodec = "AAC" // Force codec configuration bypass to test processAudioFrame correctly
+
+        // Construct a mock ADTS header (7 bytes) with frameLength of 15
+        // FrameLength occupies the lowest 2 bits of byte 3, 8 bits of byte 4, and highest 3 bits of byte 5.
+        // length = 15: 00000 0000 001111 => 0x00 0x0F
+        let mockADTS: [UInt8] = [
+            0xFF, 0xF1, // Syncword and ID (protection absent = 1 -> length is 7)
+            0x50, 0x80, // Profile, FreqIdx, channel, and start of length 
+            0x01, 0xE0, 0xFC, // Rest of length / buffer / raw block count
+            // 8 byte payload
+            0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22
+        ]
+        
+        decoder.decode(audioPayload: Data(mockADTS), pts: 0)
+        
+        XCTAssertEqual(decoder.lastExtractedPayloadSize, 8, "ADTS header should be stripped and only 8 bytes of payload should remain internally for decoding")
+    }
 }

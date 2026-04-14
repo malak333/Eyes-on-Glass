@@ -87,22 +87,31 @@ struct LogEventRow: View {
         case "audio_restored": return "speaker.wave.2"
         case "video_lost": return "video.slash"
         case "video_restored": return "video"
+        case "cc_error": return "exclamationmark.triangle"
         default: return "waveform.path.ecg"
         }
     }
     
     private var issueTypeColor: Color {
+        if let iat = log.iatMs, iat > 40.0 {
+            return .red
+        }
         switch log.issueType {
         case "ok", "stream_restored", "audio_restored", "video_restored": return .green
         case "stream_lost", "audio_lost", "video_lost": return .orange
+        case "high_iat": return .red
         default: return .secondary
         }
     }
     
     private var issueTypeTextColor: Color {
+        if let iat = log.iatMs, iat > 40.0 {
+            return .red
+        }
         switch log.issueType {
         case "ok", "stream_restored", "audio_restored", "video_restored": return .green
         case "stream_lost", "audio_lost", "video_lost": return .orange
+        case "high_iat": return .red
         default: return .red
         }
     }
@@ -124,6 +133,7 @@ struct LogEventRow: View {
                             image
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
+                                .overlay(AnomalyOverlayView(boundingBoxesJSON: log.boundingBoxes))
                         case .failure:
                             Rectangle()
                                 .fill(Color(NSColor.windowBackgroundColor))
@@ -170,6 +180,16 @@ struct LogEventRow: View {
             
             Spacer()
             
+            if let iat = log.iatMs {
+                Text(String(format: "IAT: %.1f ms", iat))
+                    .font(.caption.monospacedDigit().bold())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(iat > 40.0 ? Color.red.opacity(0.8) : Color.gray.opacity(0.2))
+                    .foregroundColor(iat > 40.0 ? .white : .primary)
+                    .cornerRadius(4)
+            }
+            
             if let score = log.issueScore {
                 Text(String(format: "Conf: %.2f", score))
                     .font(.subheadline.monospacedDigit())
@@ -207,6 +227,7 @@ struct EventDetailView: View {
                                     .resizable()
                                     .aspectRatio(contentMode: .fit)
                                     .frame(maxHeight: 400)
+                                    .overlay(AnomalyOverlayView(boundingBoxesJSON: log.boundingBoxes))
                                     .clipShape(RoundedRectangle(cornerRadius: 8))
                             case .failure:
                                 ContentUnavailableView("Image Load Failed", systemImage: "xmark.rectangle")
@@ -239,6 +260,13 @@ struct EventDetailView: View {
                     }
                     if let engine = log.analysisEngine {
                         LabeledContent("Engine", value: engine)
+                    }
+                    if let iat = log.iatMs {
+                        LabeledContent("Inter-Arrival Time (IAT)") {
+                            Text(String(format: "%.1f ms", iat))
+                                .monospacedDigit()
+                                .foregroundColor(iat > 40.0 ? .red : .primary)
+                        }
                     }
                     LabeledContent("Time", value: log.createdAt.formatted())
                 }
@@ -279,7 +307,7 @@ struct DashboardSidebar: View {
         List {
             ConnectionSectionView(streamController: streamController, modelContext: modelContext)
             
-            if streamController.connectionStatus == "Active" {
+            if streamController.connectionStatus == "Active" || streamController.currentSessionIdentifier != nil {
                 StreamStatsSectionView(streamController: streamController, logs: logs)
             }
             
@@ -315,7 +343,15 @@ struct StreamStatsSectionView: View {
             }
             .buttonStyle(.bordered)
             
-            LabeledContent("Frames Analyzed", value: "\(logs.count)")
+            Button(action: {
+                streamController.clearEvents()
+            }) {
+                Text("Clear Events")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            
+            LabeledContent("Frames Analyzed", value: "\(streamController.streamFramesAnalyzed)")
                 .monospacedDigit()
             
             let issuesCount = logs.filter { $0.issueType != "ok" }.count

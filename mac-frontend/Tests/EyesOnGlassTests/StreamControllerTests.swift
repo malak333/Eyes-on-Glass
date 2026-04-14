@@ -45,7 +45,8 @@ final class StreamControllerTests: XCTestCase {
         XCTAssertNil(controller.audioBitrate)
         XCTAssertNil(controller.audioLoudness)
         XCTAssertNil(controller.audioTruePeak)
-        XCTAssertNil(controller.audioDialNorm)
+        XCTAssertEqual(controller.streamFramesAnalyzed, 0)
+        XCTAssertNil(controller.currentIAT)
     }
     
     @MainActor
@@ -141,8 +142,136 @@ final class StreamControllerTests: XCTestCase {
         if let inserted = results.first(where: { $0.videoFilename == "udp://TEST-STREAM-3" }) {
             XCTAssertEqual(inserted.issueType, "macroblocking_incident_summary")
             XCTAssertEqual(inserted.issueSummary, "Extensive blockation occurred during high motion.")
+            XCTAssertNil(inserted.iatMs)
         } else {
             XCTFail("Could not find the inserted video log")
         }
+    }
+    
+    @MainActor
+    func testInsertVideoLogWithIAT() async throws {
+        let context = modelContainer.mainContext
+        controller.modelContext = context
+        
+        controller.insertVideoLog(
+            videoFilename: "udp://TEST-STREAM-4",
+            timestampSec: 101.5,
+            nodeSource: "Live-Multicast",
+            nodeBackbone: "East",
+            nodeDest: "Distribution",
+            issueType: "high_iat",
+            issueScore: 1.0,
+            analysisEngine: "ingestor",
+            thumbnailPath: nil,
+            iatMs: 45.2
+        )
+        
+        let descriptor = FetchDescriptor<VideoLog>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        let results = try context.fetch(descriptor)
+        
+        let inserted = results.first(where: { $0.videoFilename == "udp://TEST-STREAM-4" })
+        XCTAssertNotNil(inserted)
+        XCTAssertEqual(inserted?.iatMs, 45.2)
+    }
+    
+    @MainActor
+    func testUpdateIAT() async {
+        XCTAssertNil(controller.currentIAT)
+        
+        controller.updateIAT(12.5)
+        XCTAssertEqual(controller.currentIAT, 12.5)
+        
+        controller.updateIAT(45.2)
+        XCTAssertEqual(controller.currentIAT, 45.2)
+    }
+    
+    @MainActor
+    func testClearEventsArchivesLogs() async throws {
+        let context = modelContainer.mainContext
+        controller.modelContext = context
+        
+        controller.insertVideoLog(
+            videoFilename: "udp://TEST-STREAM-CLEAR",
+            timestampSec: 1.0,
+            nodeSource: "Source",
+            nodeBackbone: "Backbone",
+            nodeDest: "Dest",
+            issueType: "ok",
+            issueScore: 1.0,
+            analysisEngine: "test",
+            thumbnailPath: nil
+        )
+        
+        var descriptor = FetchDescriptor<VideoLog>(predicate: #Predicate { $0.isArchived == false })
+        var results = try context.fetch(descriptor)
+        XCTAssertEqual(results.count, 1)
+        
+        controller.clearEvents()
+        
+        descriptor = FetchDescriptor<VideoLog>(predicate: #Predicate { $0.isArchived == false })
+        results = try context.fetch(descriptor)
+        XCTAssertEqual(results.count, 0)
+        
+        let allDescriptor = FetchDescriptor<VideoLog>()
+        let allResults = try context.fetch(allDescriptor)
+        XCTAssertEqual(allResults.count, 1)
+        XCTAssertTrue(allResults.first?.isArchived == true)
+    }
+    
+    @MainActor
+    func testClearEventsResetsState() async {
+        controller.currentSessionIdentifier = "test-session"
+        controller.videoPID = 100
+        controller.audioPID = 101
+        controller.streamFramesAnalyzed = 500
+        controller.streamCCErrors = 5
+        controller.totalCCErrors = 5
+        controller.streamDuration = 100.0
+        controller.connectionStatus = "Disconnected"
+        
+        controller.clearEvents()
+        
+        XCTAssertNil(controller.currentSessionIdentifier)
+        XCTAssertNil(controller.videoPID)
+        XCTAssertNil(controller.audioPID)
+        XCTAssertEqual(controller.streamFramesAnalyzed, 0)
+        XCTAssertEqual(controller.streamCCErrors, 0)
+        XCTAssertEqual(controller.totalCCErrors, 0)
+        XCTAssertEqual(controller.streamIP, "-")
+    }
+    
+    @MainActor
+    func testVBRDetectionLogic() async {
+        XCTAssertFalse(controller.isVBR)
+        
+        // Simulate constant bitrate (10 Mbps) over 5 intervals
+        for _ in 0..<5 {
+            // formula: instBitrate = Double(delta) * 1316.0 * 8.0 / elapsed / 1_000_000.0
+            // so delta = instBitrate * elapsed * 1_000_000.0 / (1316.0 * 8.0)
+            // for 10 Mbps, elapsed 2.0s: delta = 10 * 2_000_000 / 10528 = 1899.69 => ~1900 packets
+            controller.updateBitrateHistory(delta: 1900, elapsed: 2.0)
+        }
+        XCTAssertFalse(controller.isVBR, "Should not detect VBR on stable bitrate")
+        
+        // Simulate a sudden drop to 8 Mbps (20% fluctuation)
+        // delta for 8 Mbps over 2.0s = 8 * 2_000_000 / 10528 = 1519.7 => ~1520 packets
+        controller.updateBitrateHistory(delta: 1520, elapsed: 2.0)
+        XCTAssertTrue(controller.isVBR, "Should detect VBR when fluctuation > 10%")
+        
+        // Simulate jitter-based false positive that SHOULD NOT trigger VBR
+        // Jitter: elapsed is 1.9s instead of 2.0s, delta is for 10 Mbps (so 10 * 1_900_000 / 10528 = 1804 packets)
+        // Since we pass true elapsed time = 1.9s, calculated instBitrate = 1804 * 10528 / 1.9 / 1M ≈ 9.99 Mbps
+        controller.updateBitrateHistory(delta: 1804, elapsed: 1.9)
+        // Since 9.99 vs 10 is < 10% fluctuation, it correctly stabilizes (if old values fall off)
+        // Note: the previous 8 Mbps value is still in the queue (size is 10 max), so isVBR remains true until 8Mbps falls out.
+        // Let's flush the queue by feeding 10 Mbps for 10 iterations.
+        for _ in 0..<10 {
+            controller.updateBitrateHistory(delta: 1900, elapsed: 2.0)
+        }
+        XCTAssertFalse(controller.isVBR, "VBR flag should reset after stable bitrate returns")
+        
+        // Feed jitter-affected time window (1.9s)
+        controller.updateBitrateHistory(delta: 1804, elapsed: 1.9)
+        XCTAssertFalse(controller.isVBR, "True elapsed time calculations should prevent jitter-based VBR detection")
     }
 }

@@ -64,9 +64,11 @@ final class StreamController: Identifiable, Hashable {
     var tsClock: String? = nil
     var pcrJitter: Double? = nil
     var pcrInterval: Double? = nil
+    var currentIAT: Double? = nil
     
     var streamDuration: TimeInterval = 0
     var streamPackets: Int = 0
+    var streamFramesAnalyzed: Int = 0
     var streamBitrate: Double = 0.0
     var streamCCErrors: Int = 0
     var totalCCErrors: Int = 0
@@ -81,6 +83,7 @@ final class StreamController: Identifiable, Hashable {
     var isVBR: Bool = false
     private var bitrateHistory: [Double] = []
     private var lastPacketsValue: Int = 0
+    private var lastCheckTime: Date? = nil
     
     private(set) var isMuted: Bool = true
     
@@ -151,43 +154,40 @@ final class StreamController: Identifiable, Hashable {
                     self.hardwareStatsHistory = stats[currentFrame] ?? []
                     
                     if let start = startTime {
-                        self.streamDuration = Date().timeIntervalSince(start)
+                        if self.connectionStatus == "Active" {
+                            self.streamDuration = Date().timeIntervalSince(start)
+                        }
                         if let prog = progress {
                             let currentTotalPackets = prog.packets ?? 0
                             let delta = currentTotalPackets - self.lastPacketsValue
                             self.lastPacketsValue = currentTotalPackets
                             self.streamPackets = currentTotalPackets
+                            self.streamFramesAnalyzed = prog.current
                             
                             let dur = max(self.streamDuration, 1.0)
                             self.streamBitrate = Double(self.streamPackets) * 1316.0 * 8.0 / dur / 1_000_000.0
                             
+                            
                             if self.streamDuration > 2.0 {
-                                let instBitrate = Double(delta) * 1316.0 * 8.0 / 2.0 / 1_000_000.0
-                                if instBitrate > 0.1 {
-                                    self.bitrateHistory.append(instBitrate)
-                                    if self.bitrateHistory.count > 10 {
-                                        self.bitrateHistory.removeFirst()
-                                    }
-                                    if self.bitrateHistory.count >= 5 {
-                                        let maxB = self.bitrateHistory.max() ?? 0
-                                        let minB = self.bitrateHistory.min() ?? 0
-                                        if maxB > 0 && ((maxB - minB) / maxB > 0.10) {
-                                            self.isVBR = true
-                                        } else {
-                                            self.isVBR = false
-                                        }
-                                    }
+                                let now = Date()
+                                let elapsed = self.lastCheckTime != nil ? now.timeIntervalSince(self.lastCheckTime!) : 2.0
+                                self.lastCheckTime = now
+                                
+                                if elapsed > 0.5 { // safeguard against tiny intervals
+                                    self.updateBitrateHistory(delta: delta, elapsed: elapsed)
                                 }
                             }
                         }
                     } else {
                         self.streamDuration = 0
                         self.streamPackets = 0
+                        self.streamFramesAnalyzed = 0
                         self.streamBitrate = 0.0
                         self.streamCCErrors = 0
                         self.isVBR = false
                         self.bitrateHistory.removeAll()
                         self.lastPacketsValue = 0
+                        self.lastCheckTime = nil
                     }
                 }
                 
@@ -199,13 +199,14 @@ final class StreamController: Identifiable, Hashable {
     @MainActor
     func startMonitoring(uri: String, context: ModelContext) async {
         self.modelContext = context
+        self.clearEvents()
+        
         self.connectionStatus = "Connecting..."
         self.activeSessionName = uri
         
         let sessionIdentifier = "Live-\(uri)-\(Date().timeIntervalSince1970)"
         self.currentSessionIdentifier = sessionIdentifier
         self.currentSessionStartTime = Date()
-        self.streamCCErrors = 0
         
         var cleanURI = uri.replacingOccurrences(of: "udp://", with: "")
         cleanURI = cleanURI.replacingOccurrences(of: "@", with: "")
@@ -231,6 +232,33 @@ final class StreamController: Identifiable, Hashable {
         self.connectionStatus = "Disconnected"
         self.activeSessionName = nil
         
+        self.audioWaveformData = []
+        self.audioVectorscopeData = []
+        self.audioPhaseData = []
+        self.audioLevelsData = []
+    }
+    
+    internal func updateBitrateHistory(delta: Int, elapsed: TimeInterval) {
+        let instBitrate = Double(delta) * 1316.0 * 8.0 / elapsed / 1_000_000.0
+        if instBitrate > 0.1 {
+            self.bitrateHistory.append(instBitrate)
+            if self.bitrateHistory.count > 10 {
+                self.bitrateHistory.removeFirst()
+            }
+            if self.bitrateHistory.count >= 5 {
+                let maxB = self.bitrateHistory.max() ?? 0
+                let minB = self.bitrateHistory.min() ?? 0
+                if maxB > 0 && ((maxB - minB) / maxB > 0.10) {
+                    self.isVBR = true
+                } else {
+                    self.isVBR = false
+                }
+            }
+        }
+    }
+    
+    @MainActor
+    func clearEvents() {
         if let context = self.modelContext {
             let descriptor = FetchDescriptor<VideoLog>(predicate: #Predicate { $0.isArchived == false })
             if let activeLogs = try? context.fetch(descriptor) {
@@ -265,19 +293,18 @@ final class StreamController: Identifiable, Hashable {
         self.tsClock = nil
         self.pcrJitter = nil
         self.pcrInterval = nil
+        self.currentIAT = nil
         
         self.streamIP = "-"
         self.streamPort = "-"
         self.streamSourceType = "-"
+        self.streamFramesAnalyzed = 0
         
         self.isVBR = false
         self.bitrateHistory.removeAll()
         self.lastPacketsValue = 0
-        
-        self.audioWaveformData = []
-        self.audioVectorscopeData = []
-        self.audioPhaseData = []
-        self.audioLevelsData = []
+        self.lastCheckTime = nil
+        self.streamCCErrors = 0
     }
     
 
@@ -295,7 +322,12 @@ final class StreamController: Identifiable, Hashable {
     }
 
     @MainActor
-    func insertVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?, issueSummary: String? = nil) {
+    func updateIAT(_ iat: Double) {
+        self.currentIAT = iat
+    }
+
+    @MainActor
+    func insertVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?, issueSummary: String? = nil, iatMs: Double? = nil, boundingBoxes: String? = nil) {
         guard let context = self.modelContext else { return }
         let log = VideoLog(
             videoFilename: videoFilename,
@@ -310,7 +342,9 @@ final class StreamController: Identifiable, Hashable {
             isArchived: false,
             sessionIdentifier: currentSessionIdentifier,
             sessionStartTime: currentSessionStartTime,
-            issueSummary: issueSummary
+            issueSummary: issueSummary,
+            iatMs: iatMs,
+            boundingBoxes: boundingBoxes
         )
         context.insert(log)
     }

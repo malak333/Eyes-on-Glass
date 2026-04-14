@@ -12,6 +12,7 @@ struct ValidationMetrics: Sendable {
     var hasTopArtifact: Bool
     var isBars: Bool
     var isSnowflakes: Bool
+    var anomalyBoundingBoxes: [CGRect]
 }
 
 struct VisionAnalyzer: Sendable {
@@ -38,7 +39,7 @@ struct VisionAnalyzer: Sendable {
         let height = Int(sourceBuffer.height)
         
         if width < 16 || height < 16 {
-            return ValidationMetrics(meanBrightness: 0, isBlackScreen: false, laplacianVariance: 0, isBlurry: false, blockiness: 1.0, hasTopArtifact: false, isBars: false, isSnowflakes: false)
+            return ValidationMetrics(meanBrightness: 0, isBlackScreen: false, laplacianVariance: 0, isBlurry: false, blockiness: 1.0, hasTopArtifact: false, isBars: false, isSnowflakes: false, anomalyBoundingBoxes: [])
         }
         
         var sum: Float = 0
@@ -205,6 +206,12 @@ struct VisionAnalyzer: Sendable {
         
         let isSnowflakes = stdDev > 30.0 && laplacianVar > 2000.0 && blockiness < 2.0 && (max(varX, varY) > 0 ? abs(varX - varY) / max(varX, varY) < 0.2 : false)
         
+        var anomalyBoundingBoxes: [CGRect] = []
+        let macroConf = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
+        if macroConf >= 0.15 && laplacianVar > 15.0 {
+            anomalyBoundingBoxes = extractAnomalyBoundingBoxes(gb: gb, width: width, height: height, rowBytes: rowBytes)
+        }
+        
         return ValidationMetrics(
             meanBrightness: meanBrightness,
             isBlackScreen: isBlackScreen,
@@ -213,8 +220,115 @@ struct VisionAnalyzer: Sendable {
             blockiness: blockiness,
             hasTopArtifact: hasTopArtifact,
             isBars: isBars,
-            isSnowflakes: isSnowflakes
+            isSnowflakes: isSnowflakes,
+            anomalyBoundingBoxes: anomalyBoundingBoxes
         )
+    }
+    
+    private static func extractAnomalyBoundingBoxes(gb: UnsafePointer<UInt8>, width: Int, height: Int, rowBytes: Int) -> [CGRect] {
+        var boxes: [CGRect] = []
+        let blockSize = 32
+        let blocksX = width / blockSize
+        let blocksY = height / blockSize
+        
+        for by in 0..<blocksY {
+            for bx in 0..<blocksX {
+                let startX = bx * blockSize
+                let startY = by * blockSize
+                
+                var lapSum: Float = 0
+                var lapSqSum: Float = 0
+                var lapCount = 0
+                
+                for y in startY..<(startY + blockSize) {
+                    if y == 0 || y >= height - 1 { continue }
+                    let r = y * rowBytes
+                    let pr = (y - 1) * rowBytes
+                    let nr = (y + 1) * rowBytes
+                    
+                    for x in startX..<(startX + blockSize) {
+                        if x == 0 || x >= width - 1 { continue }
+                        let c = Float(gb[r + x])
+                        let l = Float(gb[r + x - 1])
+                        let rt = Float(gb[r + x + 1])
+                        let u = Float(gb[pr + x])
+                        let d = Float(gb[nr + x])
+                        
+                        let lap = l + rt + u + d - 4 * c
+                        lapSum += lap
+                        lapSqSum += lap * lap
+                        lapCount += 1
+                    }
+                }
+                
+                if lapCount > 0 {
+                    let mLap = lapSum / Float(lapCount)
+                    let lapVar = (lapSqSum / Float(lapCount)) - (mLap * mLap)
+                    
+                    if lapVar > 15.0 {
+                        var hDiffBound: Float = 0
+                        var hDiffNonBound: Float = 0
+                        var hBCount = 0, hNBCount = 0
+                        for y in startY..<(startY + blockSize) {
+                            let r = y * rowBytes
+                            for x in startX..<(startX + blockSize - 1) {
+                                let diffH = abs(Float(gb[r + x + 1]) - Float(gb[r + x]))
+                                if (x + 1) % 16 == 0 || (x + 1) % 8 == 0 {
+                                    hDiffBound += diffH
+                                    hBCount += 1
+                                } else {
+                                    hDiffNonBound += diffH
+                                    hNBCount += 1
+                                }
+                            }
+                        }
+                        
+                        var vDiffBound: Float = 0
+                        var vDiffNonBound: Float = 0
+                        var vBCount = 0, vNBCount = 0
+                        for y in startY..<(startY + blockSize - 1) {
+                            let r = y * rowBytes
+                            let nr = (y + 1) * rowBytes
+                            for x in startX..<(startX + blockSize) {
+                                let diffV = abs(Float(gb[nr + x]) - Float(gb[r + x]))
+                                if (y + 1) % 16 == 0 || (y + 1) % 8 == 0 {
+                                    vDiffBound += diffV
+                                    vBCount += 1
+                                } else {
+                                    vDiffNonBound += diffV
+                                    vNBCount += 1
+                                }
+                            }
+                        }
+                        
+                        let hBM = hDiffBound / Float(max(1, hBCount))
+                        let hNBM = hDiffNonBound / Float(max(1, hNBCount))
+                        let blockX = hBM / (hNBM + 1e-5)
+                        
+                        let vBM = vDiffBound / Float(max(1, vBCount))
+                        let vNBM = vDiffNonBound / Float(max(1, vNBCount))
+                        let blockY = vBM / (vNBM + 1e-5)
+                        
+                        let blockiness = max(blockX, blockY)
+                        let macroConf = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
+                        if macroConf >= 0.15 {
+                            let rect = CGRect(
+                                x: CGFloat(startX) / CGFloat(width),
+                                y: CGFloat(startY) / CGFloat(height),
+                                width: CGFloat(blockSize) / CGFloat(width),
+                                height: CGFloat(blockSize) / CGFloat(height)
+                            )
+                            boxes.append(rect)
+                        }
+                    }
+                }
+            }
+        }
+        
+        if boxes.count > 30 {
+            boxes = Array(boxes.prefix(30))
+        }
+        return boxes
     }
     
     static func analyze(imagePath: String) -> ValidationMetrics? {

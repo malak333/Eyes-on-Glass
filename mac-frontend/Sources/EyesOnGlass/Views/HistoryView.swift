@@ -14,6 +14,7 @@ struct HistoryView: View {
     @Query(sort: \VideoLog.createdAt, order: .reverse) private var logs: [VideoLog]
     @State private var selectedLogId: VideoLog.ID?
     @State private var selectedLog: VideoLog?
+    @State private var showDeleteConfirmation = false
     
     // We will use a dictionary to keep track of the expanded state of each group.
     @State private var expandedStates: [String: Bool] = [:]
@@ -47,6 +48,48 @@ struct HistoryView: View {
                         .foregroundColor(.gray)
                 }
                 Spacer()
+                
+                Menu {
+                    Button("CSV") { DatabaseExporter.export(logs: logs, format: .csv, window: nil) }
+                    Button("JSON") { DatabaseExporter.export(logs: logs, format: .json, window: nil) }
+                    Button("PDF") { DatabaseExporter.export(logs: logs, format: .pdf, window: nil) }
+                } label: {
+                    Label("Download Database", systemImage: "arrow.down.circle")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                }
+                .menuStyle(.button)
+                .frame(width: 180)
+                
+                Button(action: {
+                    showDeleteConfirmation = true
+                }) {
+                    HStack {
+                        Image(systemName: "trash")
+                        Text("Delete Database")
+                    }
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.8))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .onHover { isHovered in
+                    if isHovered {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .confirmationDialog("Delete Database", isPresented: $showDeleteConfirmation) {
+                    Button("Delete All Past Streams", role: .destructive) {
+                        deleteDatabase()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Are you sure you want to delete all past streams? This action cannot be undone.")
+                }
             }
             .padding(24)
             .background(.ultraThinMaterial)
@@ -64,11 +107,23 @@ struct HistoryView: View {
             } else {
                 List {
                     ForEach(groupedLogs) { group in
-                        Section(header: Text("Run: \(group.startTime.formatted(date: .abbreviated, time: .standard)) - \(group.session)")
-                                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                    .foregroundColor(.white)
-                                    .padding(.top, 16)
-                                    .padding(.bottom, 8)) {
+                        Section(header: HStack {
+                            Text("Run: \(group.startTime.formatted(date: .abbreviated, time: .standard)) - \(group.session)")
+                                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white)
+                            Spacer()
+                            Menu {
+                                Button("CSV") { DatabaseExporter.export(logs: group.logs, format: .csv, window: nil) }
+                                Button("JSON") { DatabaseExporter.export(logs: group.logs, format: .json, window: nil) }
+                                Button("PDF") { DatabaseExporter.export(logs: group.logs, format: .pdf, window: nil) }
+                            } label: {
+                                Image(systemName: "arrow.down.doc")
+                            }
+                            .menuIndicator(.hidden)
+                            .frame(width: 30)
+                        }
+                        .padding(.top, 16)
+                        .padding(.bottom, 8)) {
                             
                             DisclosureGroup(
                                 isExpanded: Binding(
@@ -143,6 +198,18 @@ struct HistoryView: View {
                 )
         )
         .preferredColorScheme(.dark)
+    }
+    
+    private func deleteDatabase() {
+        for log in archivedLogs {
+            modelContext.delete(log)
+        }
+        do {
+            try modelContext.save()
+            expandedStates.removeAll()
+        } catch {
+            print("Failed to delete database: \(error)")
+        }
     }
 }
 

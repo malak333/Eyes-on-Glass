@@ -71,8 +71,15 @@ actor LiveStreamService {
     private var isPendingRecovery: Bool = true
     private var frameCount: Int = 0
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
-    private var wasAudioHealthy: Bool? = nil
     private var activeSessionName: String?
+    private var pendingCCErrorsCount: Int = 0
+    private var lastFrameProcessTime: TimeInterval = 0
+    private var audioLossStartTime: TimeInterval? = nil
+    private var wasAudioHealthy: Bool? = nil
+
+    func incrementPendingCCErrors() {
+        pendingCCErrorsCount += 1
+    }
     
     func recordIssueState() {
         lastIssueEncounteredTime = Date().timeIntervalSince1970
@@ -123,10 +130,12 @@ actor LiveStreamService {
         isPendingRecovery = true
         frameCount = 0
         wasAudioHealthy = nil
+        audioLossStartTime = nil
         lastMacroblockingIndex = -2
         isCurrentMBSeriesVerified = false
         isStageAVerifying = false
         currentMBVerifiedEngine = "opencv"
+        lastFrameProcessTime = 0
         visualRingBuffer.removeAll()
         
         let thumbnailsDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/EyesOnGlass/thumbnails")
@@ -150,7 +159,11 @@ actor LiveStreamService {
                 }
             }, onCCError: {
                 Task(priority: .utility) {
-                    await self.streamController?.incrementCCErrors()
+                    self.incrementPendingCCErrors()
+                    let localController = self.streamController
+                    await MainActor.run {
+                        localController?.incrementCCErrors()
+                    }
                 }
             }, onStreamLost: {
                 Task(priority: .utility) {
@@ -242,43 +255,69 @@ actor LiveStreamService {
         let currentFrameIndex = frameCount
         frameCount += 1
         
-        let isAudioHealthy = (audioHealth == .healthy)
-        if let previous = wasAudioHealthy {
-            if previous != isAudioHealthy {
-                recordIssueState()
-            }
-        } else if !isAudioHealthy {
-            recordIssueState()
+        let nowTime = CFAbsoluteTimeGetCurrent()
+        let iatMs = (lastFrameProcessTime == 0) ? 0.0 : (nowTime - lastFrameProcessTime) * 1000.0
+        lastFrameProcessTime = nowTime
+        
+        let localController = self.streamController
+        Task { @MainActor [localController] in
+            localController?.updateIAT(iatMs)
         }
         
-        if let previous = wasAudioHealthy {
-            if previous && !isAudioHealthy {
-                await self.streamController?.insertVideoLog(
-                    videoFilename: sessionName,
-                    timestampSec: Double(currentFrameIndex),
-                    nodeSource: "Live-Multicast",
-                    nodeBackbone: "East-Backbone-Live",
-                    nodeDest: "Distribution-Node",
-                    issueType: "audio_lost",
-                    issueScore: 1.0,
-                    analysisEngine: "ingestor",
-                    thumbnailPath: nil
-                )
-            } else if !previous && isAudioHealthy {
-                await self.streamController?.insertVideoLog(
-                    videoFilename: sessionName,
-                    timestampSec: Double(currentFrameIndex),
-                    nodeSource: "Live-Multicast",
-                    nodeBackbone: "East-Backbone-Live",
-                    nodeDest: "Distribution-Node",
-                    issueType: "audio_restored",
-                    issueScore: 1.0,
-                    analysisEngine: "ingestor",
-                    thumbnailPath: nil
-                )
+        let currentCCErrors = pendingCCErrorsCount
+        pendingCCErrorsCount = 0
+        
+        let isAudioHealthy = (audioHealth == .healthy)
+        
+        if isAudioHealthy {
+            audioLossStartTime = nil
+            if let previous = wasAudioHealthy {
+                if !previous {
+                    recordIssueState()
+                    await self.streamController?.insertVideoLog(
+                        videoFilename: sessionName,
+                        timestampSec: Double(currentFrameIndex),
+                        nodeSource: "Live-Multicast",
+                        nodeBackbone: "East-Backbone-Live",
+                        nodeDest: "Distribution-Node",
+                        issueType: "audio_restored",
+                        issueScore: 1.0,
+                        analysisEngine: "ingestor",
+                        thumbnailPath: nil,
+                        iatMs: iatMs
+                    )
+                }
+            }
+            wasAudioHealthy = true
+        } else {
+            if audioLossStartTime == nil {
+                audioLossStartTime = nowTime
+            }
+            
+            let timeUnhealthy = nowTime - (audioLossStartTime ?? nowTime)
+            
+            if timeUnhealthy >= 2.0 {
+                if let previous = wasAudioHealthy {
+                    if previous {
+                        recordIssueState()
+                        await self.streamController?.insertVideoLog(
+                            videoFilename: sessionName,
+                            timestampSec: Double(currentFrameIndex),
+                            nodeSource: "Live-Multicast",
+                            nodeBackbone: "East-Backbone-Live",
+                            nodeDest: "Distribution-Node",
+                            issueType: "audio_lost",
+                            issueScore: 1.0,
+                            analysisEngine: "ingestor",
+                            thumbnailPath: nil
+                        )
+                    }
+                } else {
+                    recordIssueState()
+                }
+                wasAudioHealthy = false
             }
         }
-        wasAudioHealthy = isAudioHealthy
         
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         
@@ -300,16 +339,27 @@ actor LiveStreamService {
         var retainFileOnDisk = false
         
         let cvResults = VisionAnalyzer.analyze(ciImage: ciImage, context: ciContext)
-        var issuesFound: [(String, Double, String)] = []
+        var issuesFound: [(String, Double, String, String?, String?)] = []
         var needsDiskWrite = false
             
+        if currentCCErrors > 0 {
+            let errorText = "\(currentCCErrors) CC Error\(currentCCErrors > 1 ? "s" : "")"
+            issuesFound.append(("cc_error", 1.0, "ingestor", "\(errorText) Detected", nil))
+            needsDiskWrite = true
+        }
+        
+        if iatMs > 40.0 {
+            issuesFound.append(("high_iat", 1.0, "ingestor", String(format: "IAT spiked to %.1f ms", iatMs), nil))
+            needsDiskWrite = true
+        }
+
             if let cv = cvResults {
                 if cv.isBlackScreen {
-                    issuesFound.append(("black_screen", 1.0, "opencv"))
+                    issuesFound.append(("black_screen", 1.0, "opencv", nil, nil))
                     needsDiskWrite = true
                 } else {
-                    if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")); needsDiskWrite = true }
-                    if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")); needsDiskWrite = true }
+                    if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
+                    if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
                     let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
                     appLogger.info("LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence)")
                     
@@ -317,7 +367,7 @@ actor LiveStreamService {
                         needsDiskWrite = true
                     }
                     if cv.hasTopArtifact {
-                        issuesFound.append(("top_artifact", 1.0, "opencv"))
+                        issuesFound.append(("top_artifact", 1.0, "opencv", nil, nil))
                         needsDiskWrite = true
                     }
                 }
@@ -338,9 +388,22 @@ actor LiveStreamService {
                 }
             }
             
+            var boundingBoxesJSON: String? = nil
             if let cv = cvResults, !cv.isBlackScreen {
                 let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
                 if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
+                    
+                    if !cv.anomalyBoundingBoxes.isEmpty {
+                        // Extract [CGRect] to [[CGFloat]] basically
+                        let boxesArray = cv.anomalyBoundingBoxes.map { [
+                            $0.origin.x, $0.origin.y, $0.size.width, $0.size.height
+                        ]}
+                        if let data = try? JSONSerialization.data(withJSONObject: boxesArray),
+                           let jsonString = String(data: data, encoding: .utf8) {
+                            boundingBoxesJSON = jsonString
+                        }
+                    }
+
                     let seriesGap = currentFrameIndex - lastMacroblockingIndex
                     let wasGap = seriesGap > 1
                     
@@ -369,7 +432,7 @@ actor LiveStreamService {
                                 currentMBVerifiedEngine = tier.displayName
                                 
                                 if isVerified {
-                                    issuesFound.append(("🔴 Potential Macroblocking Detected (Initial Check)", Double(macroConfidence), tier.displayName))
+                                    issuesFound.append(("🔴 Potential Macroblocking Detected (Initial Check)", Double(macroConfidence), tier.displayName, nil, boundingBoxesJSON))
                                 } else {
                                     startOfIncidentPath = nil
                                     peakMacroblockingFramePath = nil
@@ -390,9 +453,9 @@ actor LiveStreamService {
                         }
                         
                         if isCurrentMBSeriesVerified {
-                            issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine))
+                            issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine, nil, boundingBoxesJSON))
                         } else if isStageAVerifying {
-                            issuesFound.append(("macroblocking_verifying", Double(macroConfidence), "Verifying..."))
+                            issuesFound.append(("macroblocking_verifying", Double(macroConfidence), "Verifying...", nil, boundingBoxesJSON))
                         }
                     }
                 }
@@ -424,7 +487,8 @@ actor LiveStreamService {
                                 issueScore: 1.0,
                                 analysisEngine: tier.displayName,
                                 thumbnailPath: URL(fileURLWithPath: peak).lastPathComponent,
-                                issueSummary: summary
+                                issueSummary: summary,
+                                iatMs: iatMs
                             )
                         }
                     }
@@ -462,7 +526,8 @@ actor LiveStreamService {
                             issueType: "ok",
                             issueScore: 1.0,
                             analysisEngine: defaultEngine,
-                            thumbnailPath: nil
+                            thumbnailPath: nil,
+                            iatMs: iatMs
                         )
                         lastOkLogTime = now
                     }
@@ -471,7 +536,7 @@ actor LiveStreamService {
                 recordIssueState()
                 retainFileOnDisk = true
                 
-                for (issue, score, engine) in issuesFound {
+                for (issue, score, engine, summary, boxes) in issuesFound {
                     await self.streamController?.insertVideoLog(
                         videoFilename: sessionName,
                         timestampSec: Double(currentFrameIndex),
@@ -481,7 +546,10 @@ actor LiveStreamService {
                         issueType: issue,
                         issueScore: score,
                         analysisEngine: engine,
-                        thumbnailPath: savedThumbPath != nil ? URL(fileURLWithPath: savedThumbPath!).lastPathComponent : nil
+                        thumbnailPath: savedThumbPath != nil ? URL(fileURLWithPath: savedThumbPath!).lastPathComponent : nil,
+                        issueSummary: summary,
+                        iatMs: iatMs,
+                        boundingBoxes: boxes
                     )
                 }
             }
@@ -498,4 +566,27 @@ actor LiveStreamService {
     static func determineDefaultEngine(isVlmReady: Bool, frameIndex: Int, tierName: String) -> String {
         return (isVlmReady && frameIndex % 5 == 0) ? tierName : "opencv"
     }
+    
+#if DEBUG
+    // MARK: - Test Infrastructure
+    func _injectFrameForTest(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, sessionName: String, thumbnailsDir: URL) async {
+        await processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
+    }
+    
+    func _getAudioLossStartTime() -> TimeInterval? {
+        return audioLossStartTime
+    }
+    
+    func _getWasAudioHealthy() -> Bool? {
+        return wasAudioHealthy
+    }
+    
+    func _setLastOkLogTime(_ time: TimeInterval) {
+        self.lastOkLogTime = time
+    }
+    
+    func _setLastIssueEncounteredTime(_ time: TimeInterval) {
+        self.lastIssueEncounteredTime = time
+    }
+#endif
 }

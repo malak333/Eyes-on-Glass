@@ -30,6 +30,11 @@ struct SampleBufferVideoView: NSViewRepresentable {
                                                      sampleBufferOut: &sampleBuffer)
             
             if let sampleBuffer = sampleBuffer {
+                if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true) {
+                    let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+                    CFDictionarySetValue(dict, unsafeBitCast(kCMSampleAttachmentKey_DisplayImmediately, to: UnsafeRawPointer.self), unsafeBitCast(kCFBooleanTrue, to: UnsafeRawPointer.self))
+                }
+                
                 if displayLayer.status == .failed {
                     displayLayer.flush()
                 }

@@ -24,6 +24,8 @@ public class AudioDecoder {
     public var truePeak: Double? = nil
     public var dialNorm: Int? = nil
 
+    internal var lastExtractedPayloadSize: Int = 0
+    
     private var bytesSinceLastInterval: Int = 0
     private var lastIntervalTime: TimeInterval = 0
     
@@ -354,9 +356,18 @@ public class AudioDecoder {
             }
             
             if frameLength > 0 && offset + frameLength <= audioResidue.count {
-                let frameData = audioResidue.subdata(in: offset..<(offset+frameLength))
+                let frameData: Data
+                let currentLen: Int
+                if codec == "AAC" {
+                    let headerLength = (audioResidue[offset+1] & 0x01) == 0 ? 9 : 7
+                    currentLen = max(0, frameLength - headerLength)
+                    frameData = audioResidue.subdata(in: (offset + headerLength)..<(offset + frameLength))
+                } else {
+                    currentLen = frameLength
+                    frameData = audioResidue.subdata(in: offset..<(offset+frameLength))
+                }
                 
-                chunkDescriptions.append((offset: audioData.count, len: frameLength))
+                chunkDescriptions.append((offset: audioData.count, len: currentLen))
                 audioData.append(frameData)
                 accumulatedPacketCount += packetCount
                 offset += frameLength
@@ -384,6 +395,8 @@ public class AudioDecoder {
             audioResidue.removeSubrange(0..<lastValidOffset)
         }
         if audioResidue.count > 100000 { audioResidue.removeAll() }
+        
+        self.lastExtractedPayloadSize = audioData.count
         
         if audioData.isEmpty { return }
         

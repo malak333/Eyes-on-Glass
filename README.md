@@ -32,9 +32,12 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
    - **Stateless Zero-Shot Inference**: To completely eliminate ambient GPU and Core processing overhead, the VLM operates entirely on-demand. Background cache polling has been disabled. When OpenCV escalates a potential incident, the Native VLM instantly reconstructs its MLX context utilizing raw snapshot frames directly from the hardware HEIC ring buffer. This enforces a strict zero-shot architectural boundary, preventing any hallucinated context leakage between isolated broadcast corruptions.
 
 4. **Telemetry Logging (`SwiftData` & Rate Limiting)**:
+   - **Forensic Frame Metrics**: Enhanced diagnostic telemetry now tracks precise `IAT` (Inter-Arrival Time) to identify frame-by-frame UDP ingest or decoding bottlenecks, and automatically logs computer vision JSON `boundingBoxes` payload geometries. These metrics dynamically generate UI visual badges (like red `IAT: 45ms` spikes) and render contextual anomaly overlays.
    - The application relies entirely on Apple’s **SwiftData** framework, bypassing third-party ORMs like Vapor’s Fluent. 
    - Uses the `@Model` macro to asynchronously inject `VideoLog` definitions natively into local `ModelContext`, triggering `@Observable` view rebuilds flawlessly across threads.
    - **Intelligent Rate Limiting**: To prevent dashboard starvation and database clutter, "OK" health telemetry events are smartly suppressed using deterministic Wall-Clock Delta Tracking. OK events are mandated to emit strictly every 10 real-world minutes during prolonged periods of normal operation. The engine implements strict state tracking using mandatory 3-second safety buffers following initial startups or immediate incident recoveries to combat erratic telemetry flapping.
+
+    - **Forensic PDF/CSV/JSON Exports**: The platform natively includes a local `DatabaseExporter` mapping `SwiftData` models direct to macOS `NSSavePanel` and CoreText paging for quick incident analysis formatting outputs without reliance on third-party libraries.
 
 ---
 
