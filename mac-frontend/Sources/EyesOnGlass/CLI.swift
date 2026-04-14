@@ -44,6 +44,8 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
             return ctrl
         }
         
+        let outputFilename = isTestMode ? "test_analysis_results.json" : "analysis_results.json"
+        
         for tier in executionTiers {
             fputs("\n==================================\n", stderr)
             fputs("RUNNING PIPELINE AGAINST TIER: \(tier.rawValue)\n", stderr)
@@ -79,13 +81,16 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                 NativeVLMClient.shared.resetContext()
                 
                 // Invoke real offline extraction framework bound to the VLM tier
-                await ExtractionService.extractAndAnalyze(filename: filename, streamController: offlineStreamController)
+                if !isTestMode {
+                    await ExtractionService.extractAndAnalyze(filename: filename, streamController: offlineStreamController)
+                }
                 
                 // Fetch logged results
                 let fetchDescriptor = FetchDescriptor<VideoLog>()
                 do {
                     let logs = try context.fetch(fetchDescriptor)
-                    let foundTypes = Array(Set(logs.map { $0.issueType })).sorted()
+                    var foundTypes = Array(Set(logs.map { $0.issueType })).sorted()
+                    if isTestMode { foundTypes = ["mock_test_type"] }
                     
                     var videoResults = resultsDict[filename] as? [String: [String]] ?? [:]
                     videoResults[tier.rawValue] = foundTypes
@@ -100,7 +105,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                 
                 // Export Results incrementally
                 let jsonData = try JSONSerialization.data(withJSONObject: resultsDict, options: [.prettyPrinted])
-                let jsonPath = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent("analysis_results.json")
+                let jsonPath = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent(outputFilename)
                 try? jsonData.write(to: jsonPath)
                 
                 // Cleanup staged file
@@ -108,7 +113,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
             }
         }
         
-        fputs("\nAnalysis completed successfully. Final output written to analysis_results.json\n", stderr)
+        fputs("\nAnalysis completed successfully. Final output written to \(outputFilename)\n", stderr)
         
         } catch {
             fputs("Framework error: \(error)\n", stderr)

@@ -1,20 +1,45 @@
 {
-  "KGO-VOD-Encoder.ts" : {
+  "nic_monitor-net0-227.1.1.17.4017-20230316-124211.ts" : {
     "mlx-community\/gemma-4-e4b-it-4bit" : [
-      "black_screen",
-      "no_audio",
-      "static_audio"
+      "buzzing_audio",
+      "lip_sync",
+      "macroblocking",
+      "snowflakes"
     ]
   },
-  "ABCNHOU_KTRK_AUDIO_DROP_0427PMET.ts" : {
+  "out-2023.03.16.01.28.58-233.99.164.38.ts" : {
     "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "buzzing_audio",
+      "lip_sync",
+      "macroblocking"
+    ]
+  },
+  "KTXL ATSC 3 Sync issue pre-reset.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
+    ]
+  },
+  "nic_monitor-net0-227.1.1.17.4017-20230303-182411.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "buzzing_audio",
+      "lip_sync",
+      "macroblocking"
+    ]
+  },
+  "out-2022.10.27.02.24.53-232.0.168.4.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
       "macroblocking",
       "no_audio"
     ]
   },
-  "CC4Sencore.ts" : {
+  "mhz-wv-hd2.ts" : {
     "mlx-community\/gemma-4-e4b-it-4bit" : [
-      "black_screen",
+      "clicking_audio",
+      "lip_sync",
       "macroblocking",
       "no_audio",
       "top_artifact"
@@ -24,6 +49,166 @@
     "mlx-community\/gemma-4-e4b-it-4bit" : [
       "macroblocking",
       "no_audio"
+    ]
+  },
+  "missing packets digitenne 482000 06-30 19-43-54.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "ABCNHOU_KTRK_AUDIO_DROP_0427PMET.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "out-2023.06.22.11.37.06-230.0.201.41.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
+    ]
+  },
+  "kgot-sfo-disney-e2-cap2.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "clicking_audio",
+      "lip_sync",
+      "no_audio"
+    ]
+  },
+  "nic_monitor-net0-227.1.1.17.4017-20230303-181538.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "buzzing_audio",
+      "lip_sync",
+      "macroblocking"
+    ]
+  },
+  "nic_monitor-net0-227.1.1.4.4004-20220117-221435.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
+    ]
+  },
+  "orioles-10MB.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "clicking_audio",
+      "lip_sync",
+      "macroblocking",
+      "no_audio",
+      "snowflakes"
+    ]
+  },
+  "yale-test1.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "out-2022.05.14.12.07.19-230.0.33.24.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
+    ]
+  },
+  "out-2022.10.28.12.40.00-232.0.168.4.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "out-2022.03.02.02.46.52-230.0.187.23.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "KGO-VOD-Encoder.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "black_screen",
+      "no_audio",
+      "static_audio"
+    ]
+  },
+  "nic_monitor-net0-227.1.1.13.4013-20241217-123649.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "out-2022.03.02.02.11.50-230.0.187.21.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "bad-sdi.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "clicking_audio",
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "wpvi-capture.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "no_audio"
+    ]
+  },
+  "stlu-chaifetz-audio2.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "ok"
+    ]
+  },
+  "nic_monitor-lo-127.0.0.1.4999-20220117-221148.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
+    ]
+  },
+  "out-2025.04.14.12.26.04-234.0.100.91.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
+    ]
+  },
+  "out-2024.02.11.06.54.11-233.0.18.19.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "lip_sync",
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "kabc-20MB.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "black_screen",
+      "lip_sync",
+      "macroblocking",
+      "no_audio"
+    ]
+  },
+  "out-2023.02.03.10.53.48-233.0.140.19.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "no_audio"
+    ]
+  },
+  "CC4Sencore.ts" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "black_screen",
+      "macroblocking",
+      "no_audio",
+      "top_artifact"
     ]
   }
 }
