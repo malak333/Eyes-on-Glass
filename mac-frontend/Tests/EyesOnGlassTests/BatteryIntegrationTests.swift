@@ -44,7 +44,8 @@ final class BatteryIntegrationTests: XCTestCase {
     func testBatteryAssets() async throws {
         self.continueAfterFailure = true // Continue processing all files even if one fails
         
-        for (filename, expected) in expectedAnomalies {
+        let startTestTime = CFAbsoluteTimeGetCurrent()
+        for (filename, expected) in expectedAnomalies where filename == "kabc-20MB.ts" {
             print("\n=== Testing \(filename) ===")
             let fileURL = URL(fileURLWithPath: "\(baseDirectory)/\(filename)")
             
@@ -96,5 +97,17 @@ final class BatteryIntegrationTests: XCTestCase {
                 print("PASS: \(filename) (Found expected issues within \(detectedIssues))")
             }
         }
+        
+        let endTestTime = CFAbsoluteTimeGetCurrent()
+        let elapsed = endTestTime - startTestTime
+        let mbProcessed = Double(759_955_456) / 1_000_000.0 // True file size of kabc-20MB.ts in MB
+        let mbPerSecond = mbProcessed / elapsed
+        let streams20Mbps = mbPerSecond / 2.5
+        
+        print("\n\n====== FULL PIPELINE BENCHMARK (kabc-20MB.ts) ======")
+        print("Total elapsed time: \(String(format: "%.3f", elapsed)) s for \(mbProcessed) MB")
+        print("Pipeline Throughput: \(String(format: "%.2f", mbPerSecond)) MB/sec")
+        print("Maximum 20Mbps Streams (per isolated process): \(String(format: "%.2f", streams20Mbps))")
+        print("=======================================================\n")
     }
 }

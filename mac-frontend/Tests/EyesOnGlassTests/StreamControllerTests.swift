@@ -115,4 +115,34 @@ final class StreamControllerTests: XCTestCase {
         controller.isAdvancedInspectorVisible = true
         XCTAssertTrue(controller.isAdvancedInspectorVisible)
     }
+    
+    @MainActor
+    func testInsertVideoLogWithSummary() async throws {
+        let context = modelContainer.mainContext
+        controller.modelContext = context
+        
+        controller.insertVideoLog(
+            videoFilename: "udp://TEST-STREAM-3",
+            timestampSec: 100.5,
+            nodeSource: "VLM-Forensic",
+            nodeBackbone: "East",
+            nodeDest: "Review",
+            issueType: "macroblocking_incident_summary",
+            issueScore: 0.99,
+            analysisEngine: "Gemma4",
+            thumbnailPath: "test_thumb.jpg",
+            issueSummary: "Extensive blockation occurred during high motion."
+        )
+        
+        let descriptor = FetchDescriptor<VideoLog>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        let results = try context.fetch(descriptor)
+        
+        XCTAssertGreaterThanOrEqual(results.count, 1)
+        if let inserted = results.first(where: { $0.videoFilename == "udp://TEST-STREAM-3" }) {
+            XCTAssertEqual(inserted.issueType, "macroblocking_incident_summary")
+            XCTAssertEqual(inserted.issueSummary, "Extensive blockation occurred during high motion.")
+        } else {
+            XCTFail("Could not find the inserted video log")
+        }
+    }
 }

@@ -18,6 +18,7 @@ final class VideoLog {
     var isArchived: Bool = false
     var sessionIdentifier: String?
     var sessionStartTime: Date?
+    var issueSummary: String?
 
     init(videoFilename: String = "",
          timestampSec: Double = 0.0,
@@ -31,7 +32,8 @@ final class VideoLog {
          createdAt: Date = Date(),
          isArchived: Bool = false,
          sessionIdentifier: String? = nil,
-         sessionStartTime: Date? = nil) {
+         sessionStartTime: Date? = nil,
+         issueSummary: String? = nil) {
         self.videoFilename = videoFilename
         self.timestampSec = timestampSec
         self.nodeSource = nodeSource
@@ -45,5 +47,6 @@ final class VideoLog {
         self.isArchived = isArchived
         self.sessionIdentifier = sessionIdentifier
         self.sessionStartTime = sessionStartTime
+        self.issueSummary = issueSummary
     }
 }

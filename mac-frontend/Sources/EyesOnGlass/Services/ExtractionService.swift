@@ -318,13 +318,13 @@ struct ExtractionService: Sendable {
             ffmpeg.executableURL = URL(fileURLWithPath: binPath)
             let pattern = thumbnailsDir.appendingPathComponent("\(filename)_frame_%04d.jpg").path
             ffmpeg.arguments = (binPath == "/usr/bin/env") ? [
-                "ffmpeg", "-y", "-nostdin", "-v", "error",
+                "ffmpeg", "-y", "-nostdin", "-v", "fatal",
                 "-i", videoURL.path,
                 "-vf", "fps=\(fps)",
                 "-qscale:v", "2",
                 pattern
             ] : [
-                "-y", "-nostdin", "-v", "error",
+                "-y", "-nostdin", "-v", "fatal",
                 "-i", videoURL.path,
                 "-vf", "fps=\(fps)",
                 "-qscale:v", "2",

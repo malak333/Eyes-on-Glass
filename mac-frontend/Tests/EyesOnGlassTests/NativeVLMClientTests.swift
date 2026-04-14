@@ -48,27 +48,40 @@ final class NativeVLMClientTests: XCTestCase {
     }
     
     @MainActor
-    func testNativeVLMClientKVInitialization() async throws {
+    func testNativeVLMClientZeroShotInitialization() async throws {
         // Validates that the default selected tier strictly utilizes the e4b model
-        // to maintain lower memory thresholds for the 350,000 token Pyramidal budget.
+        // for stateless zero-shot inference.
         let client = NativeVLMClient.shared
-        XCTAssertEqual(client.selectedTier, .e4b, "Client should default to the highly compressed E4B tier to preserve memory for the 350,000 maxKVSize Pyramidal Token budget.")
+        XCTAssertEqual(client.selectedTier, .e4b, "Client should default to the E4B tier for stateless zero-shot inference.")
     }
     
     // Feature Implementation Standard: Automated test for Audio Feature Response Parsing
-    func testDaemonAnalyzeResponseDecoding() throws {
-        let jsonPayload = """
-        {
-            "output": "no audio",
-            "audio_features": "SGVsbG8gV29ybGQ=" // Base64 encoding of 'Hello World'
+    // Removed because the python audio daemon was pruned from the application.
+    
+    // Feature Implementation Standard: Automated test for logic additions ensuring isolation and strict typing
+    func testAnomalySynonymNormalization() {
+        let mappings: [(String, String)] = [
+            ("slate", "slate"),
+            ("Color Bars", "bars_and_tone"),
+            ("frozen", "frozen_screen"),
+            ("frozen screen", "frozen_screen"),
+            ("distorted audio", "distorted_audio"),
+            ("black screen", "black_screen"),
+            ("static on video", "snowflakes"),
+            ("snowflakes", "snowflakes"),
+            ("audio drop out", "audio_drop_out"),
+            ("lip sync issue", "lip_sync"),
+            ("lip_sync", "lip_sync"),
+            ("buzzing", "buzzing_audio"),
+            ("no audio", "no_audio"),
+            ("macroblocking", "macroblocking"),
+            ("Top artifact", "top_artifact")
+        ]
+        
+        for (input, expected) in mappings {
+            let result = NativeVLMClient.normalizeAnomalyType(input)
+            XCTAssertEqual(result, expected, "Failed properly normalizing '\(input)' to '\(expected)'. Found: '\(result)'.")
         }
-        """.data(using: .utf8)!
-        
-        let response = try JSONDecoder().decode(NativeVLMClient.DaemonAnalyzeResponse.self, from: jsonPayload)
-        
-        XCTAssertEqual(response.output, "no audio")
-        XCTAssertEqual(response.audio_features, "SGVsbG8gV29ybGQ=")
-        XCTAssertNotNil(Data(base64Encoded: response.audio_features!), "Should successfully decode Base64 string into Swift Data")
     }
 }
 

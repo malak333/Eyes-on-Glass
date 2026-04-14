@@ -284,7 +284,7 @@ final class StreamController {
     }
 
     @MainActor
-    func insertVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?) {
+    func insertVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?, issueSummary: String? = nil) {
         guard let context = self.modelContext else { return }
         let log = VideoLog(
             videoFilename: videoFilename,
@@ -298,7 +298,8 @@ final class StreamController {
             thumbnailPath: thumbnailPath,
             isArchived: false,
             sessionIdentifier: currentSessionIdentifier,
-            sessionStartTime: currentSessionStartTime
+            sessionStartTime: currentSessionStartTime,
+            issueSummary: issueSummary
         )
         context.insert(log)
     }

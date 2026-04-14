@@ -28,11 +28,12 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
    - **OpenCV Junior Pre-Filter**: Streams frames concurrently via standard Swift `Actor` execution loops. Fast heuristics (like Laplacian variance and blockiness calculations) actively monitor stream health without invoking the LLM, flagging potentially anomalous frames cheaply.
    - **Hardware-Accelerated Ring Buffer**: A persistent 30-frame visual trail is dynamically maintained in memory. To minimize overhead, raw `CVPixelBuffer` frames are synchronously encoded into HEIC (High-Efficiency Image Container) formats utilizing Apple's M4/M5 hardware Media Engine.
    - **Gemma 4 "Senior Engineer" Validations**: Only when the OpenCV Pre-Filter exceeds explicit variance thresholds is the **Native AI Analyzer** triggered. An exclusive `mlx-swift` ChatSession pipeline interfaces with the dense `Gemma 4 E4B` tier (running natively in Unified Memory via Hugging Face Hub downloads) to thoroughly inspect the frame, evaluating whether the identified artifacts correctly represent genuine broadcast anomalies.
-   - **Temporal MLX Rolling Cache**: The pipeline replicates structural memory persistence via simulated Pyramidal Variable Token Budgeting. Background frames are smoothly injected into an `mlx-swift` `RotatingKVCache` at a downscaled `256px` resolution to maximize the context window (~1000 frames cap) before the LLM evaluates the primary anomalies with sharp `1024px` precision.
+   - **Stateless Zero-Shot Inference**: To completely eliminate ambient GPU and Core processing overhead, the VLM operates entirely on-demand. Background cache polling has been disabled. When OpenCV escalates a potential incident, the Native VLM instantly reconstructs its MLX context utilizing raw snapshot frames directly from the hardware HEIC ring buffer. This enforces a strict zero-shot architectural boundary, preventing any hallucinated context leakage between isolated broadcast corruptions.
 
-4. **Telemetry Logging (`SwiftData`)**:
+4. **Telemetry Logging (`SwiftData` & Rate Limiting)**:
    - The application relies entirely on Apple’s **SwiftData** framework, bypassing third-party ORMs like Vapor’s Fluent. 
    - Uses the `@Model` macro to asynchronously inject `VideoLog` definitions natively into local `ModelContext`, triggering `@Observable` view rebuilds flawlessly across threads.
+   - **Intelligent Rate Limiting**: To prevent dashboard starvation and database clutter, "OK" health telemetry events are smartly suppressed using deterministic Wall-Clock Delta Tracking. OK events are mandated to emit strictly every 10 real-world minutes during prolonged periods of normal operation. The engine implements strict state tracking using mandatory 3-second safety buffers following initial startups or immediate incident recoveries to combat erratic telemetry flapping.
 
 ---
 

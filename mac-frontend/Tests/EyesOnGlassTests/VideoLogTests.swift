@@ -44,10 +44,11 @@ final class VideoLogTests: XCTestCase {
         let log = VideoLog(
             videoFilename: "udp://TEST-STREAM-2",
             timestampSec: 60.123,
-            issueType: "black_screen",
+            issueType: "macroblocking_incident_summary",
             issueScore: 0.95,
             analysisEngine: "ollama",
-            thumbnailPath: "live_12345_abc.jpg"
+            thumbnailPath: "live_12345_abc.jpg",
+            issueSummary: "Detailed forensic summary text goes here."
         )
         
         context.insert(log)
@@ -59,6 +60,7 @@ final class VideoLogTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(results.count, 1)
         if let inserted = results.first(where: { $0.videoFilename == "udp://TEST-STREAM-2" }) {
             XCTAssertEqual(inserted.thumbnailPath, "live_12345_abc.jpg")
+            XCTAssertEqual(inserted.issueSummary, "Detailed forensic summary text goes here.")
         } else {
             XCTFail("Could not find the inserted video log")
         }

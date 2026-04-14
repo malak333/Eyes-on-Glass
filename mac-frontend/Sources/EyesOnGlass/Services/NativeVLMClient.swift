@@ -107,9 +107,8 @@ public final class NativeVLMClient {
     """
     
     public static let stageAPrompt = """
-    Compare these two video frames chronologically (frame 1 -> frame 2).
-    Has macroblocking or severe compression artifacting appeared in the second frame compared to the first?
-    Reply exclusively in JSON: {"detected": true} or {"detected": false}.
+    Look at the images provided. Focus on the final image. Describe what you see in 1 sentence, specifically whether it exhibits severe macroblocking (large colored visual artifacts, heavy blocky pixelation).
+    Reply exclusively in valid JSON format: {"description": "...", "detected": true/false}.
     """
     
     public static let stageBPrompt = """
@@ -167,41 +166,36 @@ public final class NativeVLMClient {
                 using: EyesOnGlassTokenizerLoader()
             )
             
-            // Rolling KV Cache initialized here utilizing MLX LM's maxKVSize logic
-            // 350,000 limit accommodates ~1,000 Pyramidal/Variable Budget frames
-            let genParams = GenerateParameters(maxTokens: 50, maxKVSize: 350_000)
+            // Initialize ChatSession with a lowered KV limit strictly for localized zero-shot context
+            let genParams = GenerateParameters(maxTokens: 50, maxKVSize: 10_000)
             self.chatSession = ChatSession(self.modelContainer!, generateParameters: genParams)
             
             self.state = .ready
         } catch {
-            self.state = .error("Failed to load model: \(error.localizedDescription)")
+            let errorMsg = "Failed to load model: \(error.localizedDescription)"
+            print(errorMsg)
+            fflush(stdout)
+            self.state = .error(errorMsg)
         }
     }
     
-    public func ingestFrameCache(imagePath: String, tier: GemmaModelTier) async {
-        let isReady = await MainActor.run { 
-            if case .ready = self.state { return true }
-            return false
-        }
-        guard isReady, let session = self.chatSession, let ciImage = CIImage(contentsOf: URL(fileURLWithPath: imagePath)) else { return }
-        
-        do {
-            // Apply variable visual token budget (downsample older context frames)
-            session.processing = UserInput.Processing(resize: CGSize(width: 256, height: 256))
-            session.generateParameters.maxTokens = 5
-            
-            // We stream into the cache, then ignore the output.
-            _ = try await session.respond(to: "log_frame", role: .user, image: .ciImage(ciImage))
-        } catch {
-            print("Failed to ingest frame context cache: \(error)")
+    @MainActor
+    public func resetContext() {
+        if let container = self.modelContainer {
+            let genParams = GenerateParameters(maxTokens: 50, maxKVSize: 10_000)
+            self.chatSession = ChatSession(container, generateParameters: genParams)
         }
     }
+    
+
     
     public func analyzeSequenceForIssues(frames: [String], tier: GemmaModelTier) async -> [VLMAnomaly] {
         let isReady = await MainActor.run { 
             if case .ready = self.state { return true }
             return false
         }
+        
+        await MainActor.run { self.resetContext() }
         
         guard isReady, let session = self.chatSession else { 
             return []
@@ -219,7 +213,8 @@ public final class NativeVLMClient {
             
             let outputText = try await session.respond(to: NativeVLMClient.multimodalPrompt, role: .user, images: userInput.images, videos: userInput.videos)
             
-            print("NativeVLMClient output: \\(outputText)")
+            print("NativeVLMClient output: \(outputText)")
+            fflush(stdout)
             
             var cleanedText = outputText
             let pattern = "```(?:json)?\\s*([\\s\\S]*?)\\s*```"
@@ -234,7 +229,9 @@ public final class NativeVLMClient {
                 let decoder = JSONDecoder()
                 do {
                     let anomalies = try decoder.decode([VLMAnomaly].self, from: data)
-                    return anomalies
+                    return anomalies.map { anomaly in
+                        return VLMAnomaly(type: NativeVLMClient.normalizeAnomalyType(anomaly.type), confidence: anomaly.confidence, modality: anomaly.modality)
+                    }
                 } catch {
                     print("Failed to decode standard array format: \\(error). Trying fallback.")
                 }
@@ -260,6 +257,9 @@ public final class NativeVLMClient {
             if case .ready = self.state { return true }
             return false
         }
+        
+        await MainActor.run { self.resetContext() }
+        
         guard isReady, let session = self.chatSession else { return false }
         
         do {
@@ -270,6 +270,7 @@ public final class NativeVLMClient {
             let outputText = try await session.respond(to: NativeVLMClient.stageAPrompt, role: .user, images: userInput.images, videos: userInput.videos)
 
             let lower = outputText.lowercased()
+            fputs("Stage A output: \(outputText)\n", stderr)
             return lower.contains("\"detected\": true") || lower.contains("\"detected\":true") || lower.contains("true")
         } catch {
             return false
@@ -281,6 +282,9 @@ public final class NativeVLMClient {
             if case .ready = self.state { return true }
             return false
         }
+        
+        await MainActor.run { self.resetContext() }
+        
         guard isReady, let session = self.chatSession else { return nil }
         
         do {
@@ -297,4 +301,21 @@ public final class NativeVLMClient {
         }
     }
     
+    public static func normalizeAnomalyType(_ type: String) -> String {
+        var newType = type.lowercased().replacingOccurrences(of: " ", with: "_")
+        if newType.contains("slate") { return "slate" }
+        if newType.contains("bars") { return "bars_and_tone" }
+        if newType.contains("frozen") { return "frozen_screen" }
+        if newType.contains("distort") { return "distorted_audio" }
+        if newType.contains("black") { return "black_screen" }
+        if newType.contains("snow") || newType.contains("static") { return "snowflakes" }
+        if newType.contains("audio_drop") || newType.contains("drop_out") { return "audio_drop_out" }
+        if newType.contains("lip_sync") { return "lip_sync" }
+        if newType.contains("buzz") { return "buzzing_audio" }
+        if newType.contains("no_audio") { return "no_audio" }
+        if newType.contains("macroblock") { return "macroblocking" }
+        if newType.contains("click") { return "clicking_audio" }
+        if newType.contains("top_artifact") { return "top_artifact" }
+        return newType
+    }
 }

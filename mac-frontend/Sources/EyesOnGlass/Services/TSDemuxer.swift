@@ -8,7 +8,11 @@ public enum TSDemuxerEvent {
 
 public class TSDemuxer {
     private var buffer = Data()
+    private var bufferOffset = 0
     private let tsPacketSize = 188
+    
+    // NAL search codes
+    private let nalStartCode = Data([0x00, 0x00, 0x01])
     
     // State for PES accumulation
     private var isGatheringVideoPES = false
@@ -61,22 +65,32 @@ public class TSDemuxer {
         currentEvents.removeAll(keepingCapacity: true)
         buffer.append(data)
         
-        while buffer.count >= tsPacketSize {
-            if buffer[buffer.startIndex] != 0x47 {
-                if let nextSync = buffer.firstIndex(of: 0x47) {
-                    buffer.removeSubrange(buffer.startIndex..<nextSync)
+        while buffer.count - bufferOffset >= tsPacketSize {
+            let startIndex = buffer.startIndex.advanced(by: bufferOffset)
+            
+            if buffer[startIndex] != 0x47 {
+                let searchRange = startIndex..<buffer.endIndex
+                if let nextSync = buffer.range(of: Data([0x47]), options: [], in: searchRange)?.lowerBound {
+                    bufferOffset += buffer.distance(from: startIndex, to: nextSync)
                     continue
                 } else {
-                    buffer.removeAll()
+                    bufferOffset = buffer.count
                     break
                 }
             }
             
-            let tsPacket = Data([UInt8](buffer.prefix(tsPacketSize)))
-            buffer.removeFirst(tsPacketSize)
+            let tsPacket = buffer.subdata(in: startIndex..<startIndex.advanced(by: tsPacketSize))
+            bufferOffset += tsPacketSize
             
             parseTSPacket(tsPacket)
         }
+        
+        // Prevent buffer bloat
+        if bufferOffset > 512 * 1024 {
+            buffer.removeSubrange(0..<bufferOffset)
+            bufferOffset = 0
+        }
+        
         return currentEvents
     }
     
@@ -299,57 +313,45 @@ public class TSDemuxer {
     
     private func extractNALUnits(boundary: Int, oldPts: Int64, oldDts: Int64?) {
         var startOffset = videoStreamBuffer.startIndex
-        while startOffset < videoStreamBuffer.endIndex - 4 {
-            var nalStart = -1
-            var prefixLength = 0
-            
-            for i in startOffset..<(videoStreamBuffer.endIndex - 2) {
-                if i < videoStreamBuffer.endIndex - 3, videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 0, videoStreamBuffer[i+3] == 1 {
-                    nalStart = i
-                    prefixLength = 4
-                    break
-                }
-                if videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 1 {
-                    nalStart = i
-                    prefixLength = 3
-                    break
-                }
+        
+        while startOffset < videoStreamBuffer.endIndex - 3 {
+            let initialSearchRange = startOffset..<videoStreamBuffer.endIndex
+            guard let firstRange = videoStreamBuffer.range(of: nalStartCode, options: [], in: initialSearchRange) else {
+                break 
             }
             
-            if nalStart == -1 {
-                let remaining = videoStreamBuffer.endIndex - startOffset
-                let keep = min(3, remaining)
-                startOffset = videoStreamBuffer.endIndex - keep
-                break
+            var nalStart = firstRange.lowerBound
+            var prefixLength = 3
+            if nalStart > videoStreamBuffer.startIndex && videoStreamBuffer[nalStart - 1] == 0x00 {
+                nalStart = nalStart - 1
+                prefixLength = 4
             }
             
-            var nextNalStart = -1
-            let searchStart = nalStart + prefixLength
-            let optimizedSearchStart = max(searchStart, boundary - 4)
-            if optimizedSearchStart < (videoStreamBuffer.endIndex - 2) {
-                for i in optimizedSearchStart..<(videoStreamBuffer.endIndex - 2) {
-                    if i < videoStreamBuffer.endIndex - 3, videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 0, videoStreamBuffer[i+3] == 1 {
-                        nextNalStart = i
-                        break
-                    }
-                    if videoStreamBuffer[i] == 0, videoStreamBuffer[i+1] == 0, videoStreamBuffer[i+2] == 1 {
-                        nextNalStart = i
-                        break
-                    }
-                }
+            let contentStart = nalStart + prefixLength
+            let optimizedSearchStart = max(contentStart, boundary - 4)
+            
+            if optimizedSearchStart > videoStreamBuffer.endIndex - 3 {
+                startOffset = nalStart
+                break 
             }
             
-            if nextNalStart == -1 {
+            let nextSearchRange = optimizedSearchStart..<videoStreamBuffer.endIndex
+            guard let nextRange = videoStreamBuffer.range(of: nalStartCode, options: [], in: nextSearchRange) else {
                 startOffset = nalStart
                 break
             }
             
-            let nalUnit = videoStreamBuffer[nalStart..<nextNalStart]
+            var nextNalStart = nextRange.lowerBound
+            if nextNalStart > contentStart && videoStreamBuffer[nextNalStart - 1] == 0x00 {
+                nextNalStart = nextNalStart - 1
+            }
             
             let ptsToUse = nalStart < boundary ? oldPts : currentVideoPTS
             let dtsToUse = nalStart < boundary ? oldDts : currentVideoDTS
             
+            let nalUnit = videoStreamBuffer[nalStart..<nextNalStart]
             currentEvents.append(.nalUnit(Data(nalUnit), pts: ptsToUse, dts: dtsToUse))
+            
             startOffset = nextNalStart
         }
         
@@ -449,6 +451,7 @@ public class TSDemuxer {
     
     public func reset() {
         buffer.removeAll()
+        bufferOffset = 0
         isGatheringVideoPES = false
         isGatheringAudioPES = false
         videoStreamBuffer.removeAll()

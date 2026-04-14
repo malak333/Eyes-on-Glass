@@ -362,12 +362,25 @@ public class AudioDecoder {
                 offset += frameLength
                 lastValidOffset = offset
             } else {
-                offset += 1
+                let searchRange = (offset + 1)..<audioResidue.count
+                if codec == "AC-3" {
+                    if let match = audioResidue.range(of: Data([0x0B, 0x77]), options: [], in: searchRange) {
+                        offset = match.lowerBound
+                    } else {
+                        offset = audioResidue.count
+                    }
+                } else {
+                    if let match = audioResidue.range(of: Data([0xFF]), options: [], in: searchRange) {
+                        offset = match.lowerBound
+                    } else {
+                        offset = audioResidue.count
+                    }
+                }
                 lastValidOffset = offset
             }
         }
         
-        if lastValidOffset > 0 {
+        if lastValidOffset > 0 && lastValidOffset <= audioResidue.count {
             audioResidue.removeSubrange(0..<lastValidOffset)
         }
         if audioResidue.count > 100000 { audioResidue.removeAll() }

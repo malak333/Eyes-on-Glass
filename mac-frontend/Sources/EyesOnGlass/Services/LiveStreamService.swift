@@ -77,10 +77,17 @@ actor LiveStreamService {
     private var ingestor: UDPIngestor?
     private var isActive = false
     private var lastOkLogTime: TimeInterval = 0
+    private var lastIssueEncounteredTime: TimeInterval = 0
+    private var isPendingRecovery: Bool = true
     private var frameCount: Int = 0
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private var wasAudioHealthy: Bool? = nil
     private var activeSessionName: String?
+    
+    func recordIssueState() {
+        lastIssueEncounteredTime = Date().timeIntervalSince1970
+        isPendingRecovery = true
+    }
     
     // Ring Buffer for visual UI and Evidence export (30 frames max)
     private var visualRingBuffer: [Data] = []
@@ -88,6 +95,7 @@ actor LiveStreamService {
     // Macroblocking Series State
     private var lastMacroblockingIndex: Int = -2
     private var isCurrentMBSeriesVerified: Bool = false
+    private var isStageAVerifying: Bool = false
     private var currentMBVerifiedEngine: String = "opencv"
     private var peakMacroblockingScore: Double = 0.0
     private var peakMacroblockingFramePath: String?
@@ -123,10 +131,13 @@ actor LiveStreamService {
         isActive = true
         activeSessionName = sessionName
         lastOkLogTime = 0 
+        lastIssueEncounteredTime = Date().timeIntervalSince1970
+        isPendingRecovery = true
         frameCount = 0
         wasAudioHealthy = nil
         lastMacroblockingIndex = -2
         isCurrentMBSeriesVerified = false
+        isStageAVerifying = false
         currentMBVerifiedEngine = "opencv"
         visualRingBuffer.removeAll()
         
@@ -155,6 +166,7 @@ actor LiveStreamService {
                 }
             }, onStreamLost: {
                 Task {
+                    await self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -170,6 +182,7 @@ actor LiveStreamService {
                 }
             }, onStreamRestored: {
                 Task {
+                    await self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -185,6 +198,7 @@ actor LiveStreamService {
                 }
             }, onVideoLost: {
                 Task {
+                    await self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -200,6 +214,7 @@ actor LiveStreamService {
                 }
             }, onVideoRestored: {
                 Task {
+                    await self.recordIssueState()
                     let ts = Double(self.frameCount)
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,
@@ -215,7 +230,7 @@ actor LiveStreamService {
                 }
             })
         }
-        appLogger.info("LiveStreamService: UDPIngestor started for \(uri, privacy: .public)")
+        appLogger.info("LiveStreamService: UDPIngestor started for \\(uri, privacy: .public)")
     }
     
     func stopMonitoring() async {
@@ -235,10 +250,19 @@ actor LiveStreamService {
     private func processFrame(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, sessionName: String, thumbnailsDir: URL, ) async {
         guard isActive, sessionName == activeSessionName else { return }
         
+        let now = Date().timeIntervalSince1970
         let currentFrameIndex = frameCount
         frameCount += 1
         
         let isAudioHealthy = (audioHealth == .healthy)
+        if let previous = wasAudioHealthy {
+            if previous != isAudioHealthy {
+                recordIssueState()
+            }
+        } else if !isAudioHealthy {
+            recordIssueState()
+        }
+        
         if let previous = wasAudioHealthy {
             if previous && !isAudioHealthy {
                 await StreamController.shared.insertVideoLog(
@@ -283,7 +307,7 @@ actor LiveStreamService {
         guard let jpegData = ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [:]) else { return }
         
         let frameID = UUID().uuidString
-        let thumbURL = thumbnailsDir.appendingPathComponent("live_\(frameID).jpg")
+        let thumbURL = thumbnailsDir.appendingPathComponent("live_\\(frameID).jpg")
         
         do {
             try jpegData.write(to: thumbURL)
@@ -300,11 +324,14 @@ actor LiveStreamService {
                     if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv")); videoIssueFound = true }
                     if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv")); videoIssueFound = true }
                     let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
-                    appLogger.info("LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence)")
+                    appLogger.info("LiveStreamService MB Check - Frame \\(currentFrameIndex): blockiness=\\(cv.blockiness), variance=\\(cv.laplacianVariance), conf=\\(macroConfidence)")
                     if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
                         let seriesGap = currentFrameIndex - lastMacroblockingIndex
+                        let wasGap = seriesGap > 1
                         
-                        if seriesGap > 1 {
+                        lastMacroblockingIndex = currentFrameIndex
+                        
+                        if wasGap && !isStageAVerifying {
                             // New series, verify it (Stage A)
                             let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
                             let isVlmReady = await MainActor.run { 
@@ -316,9 +343,13 @@ actor LiveStreamService {
                             peakMacroblockingScore = Double(macroConfidence)
                             peakMacroblockingFramePath = thumbURL.path
                             
+                            isCurrentMBSeriesVerified = false // Guarantee reset
+                            
                             if isVlmReady {
                                 if let priorPath = getPreviousFrameJPEG(thumbnailsDir: thumbnailsDir) {
+                                    isStageAVerifying = true
                                     let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: thumbURL.path, tier: tier)
+                                    isStageAVerifying = false
                                     isCurrentMBSeriesVerified = isVerified
                                     currentMBVerifiedEngine = tier.displayName
                                     
@@ -327,28 +358,31 @@ actor LiveStreamService {
                                         videoIssueFound = true
                                     } else {
                                         startOfIncidentPath = nil
+                                        peakMacroblockingFramePath = nil
                                         appLogger.info("LLM rejected live macroblocking detection at \\(currentFrameIndex)s.")
                                     }
                                 }
                             } else {
                                 isCurrentMBSeriesVerified = false
                                 startOfIncidentPath = nil
+                                peakMacroblockingFramePath = nil
                                 appLogger.error("Local LLM model isn't available to verify macroblocking. Dropping unverified logs.")
                             }
                         } else {
-                            // Continuing series
+                            // Continuing series or evaluating during suspends
                             if Double(macroConfidence) > peakMacroblockingScore {
                                 peakMacroblockingScore = Double(macroConfidence)
                                 peakMacroblockingFramePath = thumbURL.path
                             }
+                            
                             if isCurrentMBSeriesVerified {
                                 issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine))
                                 videoIssueFound = true
+                            } else if isStageAVerifying {
+                                issuesFound.append(("macroblocking_verifying", Double(macroConfidence), "Verifying..."))
+                                videoIssueFound = true
                             }
                         }
-                        
-                        // Extend window
-                        lastMacroblockingIndex = currentFrameIndex
                     }
                     if cv.hasTopArtifact {
                         issuesFound.append(("top_artifact", 1.0, "opencv")); videoIssueFound = true
@@ -358,41 +392,34 @@ actor LiveStreamService {
             
             let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
             
-            // Periodically ingest frames to maintain the VLM temporal cache context (~1 FPS)
-            if currentFrameIndex % 30 == 0 {
-                Task {
-                    await NativeVLMClient.shared.ingestFrameCache(imagePath: thumbURL.path, tier: tier)
-                }
-            }
-            
-            let now = Date().timeIntervalSince1970
             if issuesFound.isEmpty {
                 // Check if an incident just cleared (Stage B)
                 if isCurrentMBSeriesVerified, let start = startOfIncidentPath, let peak = peakMacroblockingFramePath {
-                    let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
                     let endPath = thumbURL.path
                     let sessionBackup = sessionName
                     let indexBackup = currentFrameIndex
                     
+                    isCurrentMBSeriesVerified = false
+                    startOfIncidentPath = nil
+                    peakMacroblockingFramePath = nil
+                    
                     Task {
                         if let summary = await NativeVLMClient.shared.analyzeStageB(start: start, peak: peak, end: endPath, tier: tier) {
+                            appLogger.info("Stage B incident report generated: \(summary)")
                             await StreamController.shared.insertVideoLog(
                                 videoFilename: sessionBackup,
                                 timestampSec: Double(indexBackup),
                                 nodeSource: "VLM-Forensic",
                                 nodeBackbone: "East-Backbone-Live",
                                 nodeDest: "Incident Report",
-                                issueType: summary,
+                                issueType: "macroblocking_incident_summary",
                                 issueScore: 1.0,
                                 analysisEngine: tier.displayName,
-                                thumbnailPath: peak
+                                thumbnailPath: URL(fileURLWithPath: peak).lastPathComponent,
+                                issueSummary: summary
                             )
                         }
                     }
-                    
-                    isCurrentMBSeriesVerified = false
-                    startOfIncidentPath = nil
-                    peakMacroblockingFramePath = nil
                 }
             
                 let isVlmReady = await MainActor.run {
@@ -400,21 +427,43 @@ actor LiveStreamService {
                     return false
                 }
                 let defaultEngine = LiveStreamService.determineDefaultEngine(isVlmReady: isVlmReady, frameIndex: currentFrameIndex, tierName: tier.displayName)
-                await StreamController.shared.insertVideoLog(
-                    videoFilename: sessionName,
-                    timestampSec: Double(currentFrameIndex),
-                    nodeSource: "Live-Multicast",
-                    nodeBackbone: "East-Backbone-Live",
-                    nodeDest: "Distribution-Node",
-                    issueType: "ok",
-                    issueScore: 1.0,
-                    analysisEngine: defaultEngine,
-                    thumbnailPath: nil
-                )
                 
-                lastOkLogTime = now
+                if isAudioHealthy {
+                    let timeSinceLastIssue = now - lastIssueEncounteredTime
+                    var shouldLogOk = false
+                    
+                    if isPendingRecovery {
+                        if timeSinceLastIssue >= 3.0 {
+                            shouldLogOk = true
+                            isPendingRecovery = false
+                        }
+                    } else {
+                        let timeSinceLastOk = now - lastOkLogTime
+                        if timeSinceLastOk >= 600.0 {
+                            shouldLogOk = true
+                        }
+                    }
+                    
+                    if shouldLogOk {
+                        await StreamController.shared.insertVideoLog(
+                            videoFilename: sessionName,
+                            timestampSec: Double(currentFrameIndex),
+                            nodeSource: "Live-Multicast",
+                            nodeBackbone: "East-Backbone-Live",
+                            nodeDest: "Distribution-Node",
+                            issueType: "ok",
+                            issueScore: 1.0,
+                            analysisEngine: defaultEngine,
+                            thumbnailPath: nil
+                        )
+                        lastOkLogTime = now
+                    }
+                }
+                
                 try? FileManager.default.removeItem(at: thumbURL)
             } else {
+                recordIssueState()
+                
                 for (issue, score, engine) in issuesFound {
                     await StreamController.shared.insertVideoLog(
                         videoFilename: sessionName,

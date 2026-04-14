@@ -35,9 +35,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     try? fm.createDirectory(at: uploadsDir, withIntermediateDirectories: true)
     
     do {
-        let files = try fm.contentsOfDirectory(atPath: baseDirectory)
-        var videoFiles = files.filter { $0.hasSuffix(".ts") || $0.hasSuffix(".mp4") }.sorted()
-        
+        var videoFiles = ["CIRCLE TS_2020_05_03_15_29_00_078.mp4"]
         var resultsDict = [String: Any]()
         let executionTiers: [GemmaModelTier] = [.e4b]
         
@@ -50,6 +48,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
             // We use a simulated token since it's a simulated MLX framework for now.
             let hfToken = ProcessInfo.processInfo.environment["HF_TOKEN"] ?? "mock_token"
             await NativeVLMClient.shared.prepareModel(tier: tier, token: hfToken)
+            fputs("VLM State after prepareModel: \(NativeVLMClient.shared.state)\n", stderr)
             
             for filename in videoFiles {
                 fputs(" -> Processing \(filename) [\(tier.displayName)]...\n", stderr)
@@ -69,7 +68,10 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                 
                 // Clear state for isolated tests
                 let context = container.mainContext
-                try? context.delete(model: VideoLog.self)
+                let allLogs = (try? context.fetch(FetchDescriptor<VideoLog>())) ?? []
+                allLogs.forEach { context.delete($0) }
+                try? context.save()
+                NativeVLMClient.shared.resetContext()
                 
                 // Invoke real offline extraction framework bound to the VLM tier
                 await ExtractionService.extractAndAnalyze(filename: filename)
@@ -91,17 +93,17 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                     fflush(stdout)
                 }
                 
+                // Export Results incrementally
+                let jsonData = try JSONSerialization.data(withJSONObject: resultsDict, options: [.prettyPrinted])
+                let jsonPath = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent("analysis_results.json")
+                try? jsonData.write(to: jsonPath)
+                
                 // Cleanup staged file
                 try? fm.removeItem(at: destURL)
             }
         }
         
-        // Export Results to JSON
-        fputs("\nExporting aggregated analysis results...\n", stderr)
-        let jsonData = try JSONSerialization.data(withJSONObject: resultsDict, options: [.prettyPrinted])
-        let jsonPath = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent("analysis_results.json")
-        try jsonData.write(to: jsonPath)
-        fputs("Analysis completed successfully. Output written to: \(jsonPath.path)\n", stderr)
+        fputs("\nAnalysis completed successfully. Final output written to analysis_results.json\n", stderr)
         
         } catch {
             fputs("Framework error: \(error)\n", stderr)

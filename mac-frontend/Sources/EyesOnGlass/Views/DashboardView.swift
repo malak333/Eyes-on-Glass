@@ -205,6 +205,16 @@ struct EventDetailView: View {
                 
                 Section("Event Metadata") {
                     LabeledContent("Issue Type", value: log.issueType.uppercased())
+                    if let summary = log.issueSummary {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Forensic Summary")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(summary)
+                                .font(.body)
+                        }
+                        .padding(.vertical, 4)
+                    }
                     if let score = log.issueScore {
                         LabeledContent("Confidence") {
                             Text(String(format: "%.2f", score)).monospacedDigit()

@@ -37,25 +37,34 @@ final class FastIntegrationTests: XCTestCase {
         
         let packetSize = 188
         var offset = 0
+        let testSize = 50_000_000 // Test 50MB
+        let startTime = CFAbsoluteTimeGetCurrent()
+        
         while offset + packetSize <= data.count {
             let chunk = data.subdata(in: offset..<offset+packetSize)
             let events = demuxer.process(data: chunk)
             for event in events {
                 if case let .audio(payload, pts) = event {
-                    if payloadCount == 0 && payload.count >= 2 {
-                        print(String(format: "First Audio Payload Header: 0x%02X 0x%02X", payload[0], payload[1]))
-                    }
                     payloadCount += 1
                     audioDecoder.decode(audioPayload: payload, pts: pts)
                 }
             }
             offset += packetSize
             
-            // Just test the first 5 megabytes to save time
-            if offset > 5_000_000 { break }
+            if offset >= testSize { break }
         }
         
+        let endTime = CFAbsoluteTimeGetCurrent()
+        let elapsed = endTime - startTime
+        let mbProcessed = Double(testSize) / 1_000_000.0
+        let mbPerSecond = mbProcessed / elapsed
+        let streams20Mbps = mbPerSecond / 2.5 // 20 Mbps = 2.5 MB/s
+        
         let logOut = """
+        ====== BENCHMARK RESULTS ======
+        Processed \(mbProcessed) MB in \(String(format: "%.3f", elapsed)) seconds.
+        Throughput: \(String(format: "%.2f", mbPerSecond)) MB/sec.
+        Estimated simultaneous 20Mbps streams: \(Int(streams20Mbps))
         ====== AUDIO PAYLOADS: \(payloadCount) ======
         Visuals received: \(mockBridge.visualCount)
         Active waveforms: \(mockBridge.activeWaveformCount)
