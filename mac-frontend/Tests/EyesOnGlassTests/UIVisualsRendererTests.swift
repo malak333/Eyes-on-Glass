@@ -6,7 +6,7 @@ import CoreVideo
 final class UIVisualsRendererTests: XCTestCase {
     var controller = StreamController()
     
-    func testRenderVideoFrameIsThrottled() async throws {
+    func testRenderVideoFrameZeroCopy() async throws {
         let renderer = UIVisualsRenderer(streamController: controller)
         
         let dummyPixelBuffer: CVPixelBuffer = {
@@ -17,17 +17,20 @@ final class UIVisualsRendererTests: XCTestCase {
         }()
         
         controller.isAdvancedInspectorVisible = true
-        controller.currentFrameImage = nil
+        
+        // Assert Subject broadcasts without blockages
+        let expectation = expectation(description: "videoFrameSubject should emit CVPixelBuffer")
+        let cancellable = controller.videoFrameSubject.sink { value in
+            XCTAssertNotNil(value)
+            expectation.fulfill()
+        }
         
         // Render first frame
         renderer.render(pixelBuffer: dummyPixelBuffer)
         
-        // Yield to allow async queue dispatches to process
-        try await Task.sleep(nanoseconds: 200_000_000) 
-        
-        // CIContext may fail to render a backing CGImage for a raw CVPixelBuffer in headless tests.
-        // We only assert that no crash occurred and the dispatch queues handled the workload.
-        XCTAssertTrue(true, "UIVisualsRenderer processed video frame without crashing")
+        // Yield to let Combine subject sync execute
+        await fulfillment(of: [expectation], timeout: 1.0)
+        cancellable.cancel()
         
         controller.isAdvancedInspectorVisible = false
     }

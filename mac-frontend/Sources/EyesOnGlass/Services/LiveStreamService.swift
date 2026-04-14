@@ -23,30 +23,9 @@ class UIVisualsRenderer: @unchecked Sendable {
     private var lastAudioRenderTime: TimeInterval = 0
 
     func render(pixelBuffer: CVPixelBuffer) {
-        videoQueue.async {
-            let now = CFAbsoluteTimeGetCurrent()
-            guard now - self.lastVideoRenderTime >= 1.0 / 30.0 else { return }
-            guard !self.isRenderingVideo else { return }
-            self.isRenderingVideo = true
-            
-            Task {
-                let isVisible = await MainActor.run { self.streamController?.isAdvancedInspectorVisible == true }
-                if isVisible {
-                    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-                    if let cgImage = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                        let nsImage = NSImage(cgImage: cgImage, size: ciImage.extent.size)
-                        await MainActor.run {
-                            self.streamController?.currentFrameImage = Image(nsImage: nsImage)
-                        }
-                    }
-                }
-                
-                self.videoQueue.async {
-                    self.lastVideoRenderTime = CFAbsoluteTimeGetCurrent()
-                    self.isRenderingVideo = false
-                }
-            }
-        }
+        // Core Animation AVSampleBufferDisplayLayer natively handles its own execution threading and frame drops.
+        // Bypassing MainActor to achieve zero-copy propagation!
+        streamController?.videoFrameSubject.send(pixelBuffer)
     }
     
     func render(waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {

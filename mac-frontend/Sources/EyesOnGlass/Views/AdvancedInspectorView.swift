@@ -9,18 +9,8 @@ struct AdvancedInspectorView: View {
             HStack(alignment: .top, spacing: 16) {
                 // Live Video
                 ZStack(alignment: .bottomTrailing) {
-                    Group {
-                        if let image = streamController.currentFrameImage {
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        } else {
-                            Rectangle()
-                                .fill(Color(NSColor.windowBackgroundColor).opacity(0.1))
-                                .overlay(Text("No Signal").foregroundColor(.secondary))
-                        }
-                    }
-                    .aspectRatio(16/9, contentMode: .fit)
+                    SampleBufferVideoView(frameStream: streamController.videoFrameSubject.eraseToAnyPublisher())
+                        .aspectRatio(16/9, contentMode: .fit)
                     .frame(maxWidth: .infinity, alignment: .top)
                     
                     Button {

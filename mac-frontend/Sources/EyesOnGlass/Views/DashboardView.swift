@@ -152,6 +152,13 @@ struct LogEventRow: View {
                     .font(.headline)
                     .foregroundColor(issueTypeTextColor)
                 
+                if let summary = log.issueSummary {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                        .lineLimit(3)
+                }
+                
                 Text(String(format: "PTS: %.3f • Engine: %@", log.timestampSec, log.analysisEngine ?? "unknown"))
                     .font(.subheadline)
                     .foregroundColor(.secondary)

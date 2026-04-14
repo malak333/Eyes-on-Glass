@@ -1,6 +1,8 @@
 import SwiftData
 import Foundation
 import SwiftUI
+import Combine
+import CoreVideo
 
 /// The primary bridge between the background hardware Actors and the SwiftUI Views.
 @Observable
@@ -24,8 +26,7 @@ final class StreamController: Identifiable, Hashable {
     var selectedTimeframe: String = "1m"
     var currentSessionIdentifier: String?
     var currentSessionStartTime: Date?
-    var currentFrameImage: Image?
-
+    @ObservationIgnored let videoFrameSubject = PassthroughSubject<CVPixelBuffer, Never>()
     var videoPID: UInt16? = nil
     var audioPID: UInt16? = nil
     var videoResolution: CGSize? = nil
@@ -241,7 +242,6 @@ final class StreamController: Identifiable, Hashable {
         }
         self.currentSessionIdentifier = nil
         self.currentSessionStartTime = nil
-        self.currentFrameImage = nil
         self.videoPID = nil
         self.audioPID = nil
         self.videoResolution = nil

@@ -112,9 +112,9 @@ public final class NativeVLMClient {
     """
     
     public static let stageBPrompt = """
-    Analyze these three chronologically ordered frames representing an anomaly incident (Start, Peak Severity, End).
-    Provide a professional Incident Report summary (1-2 sentences) describing the visual severity, duration or extent of the interference observed across the sequence.
-    Reply exactly and only with the summary string. No preamble.
+    You are an expert video broadcast analyst. Three chronologically ordered images are provided with this prompt representing a macroblocking video anomaly incident (Start, Peak Severity, and End).
+    Analyze the provided images and write a concise, professional Incident Report summary (1-2 sentences) describing the visual severity, duration, and progression of the interference across the sequence.
+    Do not output templates, examples, or questions. Reply exactly and only with the final summary string.
     """
     
     @MainActor public var state: VLMState = .notLoaded
