@@ -1,5 +1,10 @@
 {
-  "test.mkv" : {
+  ".hidden.mp4" : {
+    "mlx-community\/gemma-4-e4b-it-4bit" : [
+      "mock_test_type"
+    ]
+  },
+  "test.ts" : {
     "mlx-community\/gemma-4-e4b-it-4bit" : [
       "mock_test_type"
     ]
@@ -9,12 +14,7 @@
       "mock_test_type"
     ]
   },
-  ".hidden.mp4" : {
-    "mlx-community\/gemma-4-e4b-it-4bit" : [
-      "mock_test_type"
-    ]
-  },
-  "test.ts" : {
+  "test.mkv" : {
     "mlx-community\/gemma-4-e4b-it-4bit" : [
       "mock_test_type"
     ]

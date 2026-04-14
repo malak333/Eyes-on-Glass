@@ -12,14 +12,14 @@ final class NativeVLMClientTests: XCTestCase {
         // Reset state
         client.state = .notLoaded
         
-        // Attempt to prepare without token
-        await client.prepareModel(tier: .e4b, token: "")
+        // Attempt to prepare (will fail if bundle is missing, but that confirms execution path)
+        await client.prepareModel()
         
-        // Validate it throws the authentication error
+        // Validate state
         if case .error(let message) = client.state {
-            XCTAssertTrue(message.contains("valid Hugging Face token is required"), "Should require a Hugging Face token.")
+            XCTAssertTrue(message.contains("Model files not found") || message.contains("Insufficient Unified Memory"), "Should trigger a generic environment or bundle error.")
         } else {
-            XCTFail("Expected an error regarding an empty token.")
+            XCTFail("Expected an error regarding bundle/memory.")
         }
     }
     

@@ -18,12 +18,13 @@ public actor UDPIngestor {
     
     // Timers
     private var lastPacketTime: TimeInterval = 0
+    private var windowMaxIAT: Double = 0.0
     private var heartbeatTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
-    private var streamContinuation: AsyncStream<Data>.Continuation?
+    private var streamContinuation: AsyncStream<(Data, Double)>.Continuation?
     
     // Callback for LiveStreamService
-    private var onFrameCallback: ((CVPixelBuffer, AudioHealth) -> Void)?
+    private var onFrameCallback: ((CVPixelBuffer, AudioHealth, Double) -> Void)?
     private var onAudioVisualsCallback: (([Float], [CGPoint], [Float], [Float]) -> Void)?
     private var onPacketCallback: ((Int) -> Void)?
     private var bridge: IngestorBridge?
@@ -55,7 +56,7 @@ public actor UDPIngestor {
     
     public func start(
         uri: String, 
-        onFrame: @escaping (CVPixelBuffer, AudioHealth) -> Void, 
+        onFrame: @escaping (CVPixelBuffer, AudioHealth, Double) -> Void, 
         onVideoFrame: @escaping (CVPixelBuffer) -> Void,
         onAudioVisuals: @escaping ([Float], [CGPoint], [Float], [Float]) -> Void,
         onPacket: @escaping (Int) -> Void,
@@ -78,7 +79,10 @@ public actor UDPIngestor {
         
         await streamMonitor.setOnSynced { [weak self] frame, audio in
             guard let self = self else { return }
-            Task(priority: .userInitiated) { await self.forwardFrame(frame, audio: audio) }
+            Task(priority: .userInitiated) {
+                let maxIAT = await self.captureAndResetIAT()
+                await self.forwardFrame(frame, audio: audio, networkIAT: maxIAT)
+            }
         }
         
         let newBridge = IngestorBridge(
@@ -92,15 +96,12 @@ public actor UDPIngestor {
         videoDecoder.delegate = newBridge
         audioDecoder.delegate = newBridge
         
-        let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: (Data, Double).self)
         self.streamContinuation = continuation
         
-        self.processingTask = Task(priority: .userInitiated) {
-            for await data in stream {
-                if Task.isCancelled || !self.isActive { break }
-                autoreleasepool {
-                    self.handleData(data)
-                }
+        self.processingTask = Task.detached(priority: .userInitiated) {
+            for await (data, pktIat) in stream {
+                await self.handleData(data, packetIat: pktIat)
             }
         }
         
@@ -201,6 +202,8 @@ public actor UDPIngestor {
                     inet_pton(AF_INET, host, &mreq.imr_multiaddr)
                     mreq.imr_interface.s_addr = INADDR_ANY.bigEndian
                     setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, socklen_t(MemoryLayout<ip_mreq>.size))
+                    var timestampOn: Int32 = 1
+                    setsockopt(fd, SOL_SOCKET, SO_TIMESTAMP, &timestampOn, socklen_t(MemoryLayout<Int32>.size))
                     
                     let flags = fcntl(fd, F_GETFL)
                     fcntl(fd, F_SETFL, flags | O_NONBLOCK)
@@ -208,17 +211,67 @@ public actor UDPIngestor {
                     self.bsdSocketTask = Task.detached(priority: .userInitiated) {
                         let bufferSize = 65536
                         let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-                        defer { buffer.deallocate() }
+                        
+                        let controlBufSize = 256
+                        let controlBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: controlBufSize)
+                        
+                        defer { 
+                            buffer.deallocate()
+                            controlBuf.deallocate()
+                        }
                         
                         var batchData = Data()
                         batchData.reserveCapacity(65536)
+                        var lastRecvTime: Double = 0
+                        var batchPeakIAT: Double = 0
+                        
+                        var iov = iovec(iov_base: buffer, iov_len: Int(bufferSize))
+                        var msg = msghdr()
                         
                         while true {
                             if Task.isCancelled { break }
                             var readSomething = false
                             while true {
-                                let bytesRead = recv(fd, buffer, bufferSize, 0)
+                                msg.msg_name = nil
+                                msg.msg_namelen = 0
+                                msg.msg_iov = withUnsafeMutablePointer(to: &iov) { $0 }
+                                msg.msg_iovlen = 1
+                                msg.msg_control = UnsafeMutableRawPointer(controlBuf)
+                                msg.msg_controllen = socklen_t(controlBufSize)
+                                msg.msg_flags = 0
+                                
+                                let bytesRead = recvmsg(fd, &msg, 0)
                                 if bytesRead > 0 {
+                                    var packetTime = CFAbsoluteTimeGetCurrent() // Fallback to scheduler time
+                                    
+                                    if let controlPtr = msg.msg_control, msg.msg_controllen >= 12 {
+                                        var cmsgPtr = controlPtr.assumingMemoryBound(to: cmsghdr.self)
+                                        var remainingLen = Int(msg.msg_controllen)
+                                        
+                                        while remainingLen >= 12 {
+                                            let cmsgLen = Int(cmsgPtr.pointee.cmsg_len)
+                                            if cmsgLen < 12 || cmsgLen > remainingLen { break }
+                                            
+                                            // Extract the physical microsecond hardware interrupt payload
+                                            if cmsgPtr.pointee.cmsg_level == SOL_SOCKET && cmsgPtr.pointee.cmsg_type == SCM_TIMESTAMP {
+                                                let dataPtr = UnsafeRawPointer(cmsgPtr).advanced(by: 12)
+                                                let tv = dataPtr.assumingMemoryBound(to: timeval.self).pointee
+                                                packetTime = Double(tv.tv_sec) + (Double(tv.tv_usec) / 1_000_000.0)
+                                                break
+                                            }
+                                            
+                                            let alignedLen = (cmsgLen + 3) & ~3
+                                            remainingLen -= alignedLen
+                                            cmsgPtr = UnsafeMutableRawPointer(cmsgPtr).advanced(by: alignedLen).assumingMemoryBound(to: cmsghdr.self)
+                                        }
+                                    }
+                                    
+                                    if lastRecvTime > 0 {
+                                        let iat = (packetTime - lastRecvTime) * 1000.0
+                                        if iat > batchPeakIAT { batchPeakIAT = iat }
+                                    }
+                                    lastRecvTime = packetTime
+                                    
                                     batchData.append(buffer, count: bytesRead)
                                     readSomething = true
                                     if batchData.count >= 65536 { break }
@@ -228,8 +281,9 @@ public actor UDPIngestor {
                             }
                             
                             if batchData.count > 0 {
-                                continuation?.yield(batchData)
+                                continuation?.yield((batchData, batchPeakIAT))
                                 batchData.removeAll(keepingCapacity: true)
+                                batchPeakIAT = 0
                             }
                             
                             if !readSomething {
@@ -262,13 +316,20 @@ public actor UDPIngestor {
         }
     }
     
-    private nonisolated func receiveUnicast(connection: NWConnection, continuation: AsyncStream<Data>.Continuation?) {
-        connection.receiveMessage { (content, context, isComplete, error) in
+    private nonisolated func receiveUnicast(connection: NWConnection, continuation: AsyncStream<(Data, Double)>.Continuation?, lastTime: Double = CFAbsoluteTimeGetCurrent(), peakIAT: Double = 0) {
+        connection.receiveMessage { [weak connection] (content, context, isComplete, error) in
+            guard let connection = connection else { return }
+            let now = CFAbsoluteTimeGetCurrent()
+            let iterIat = (lastTime == 0) ? 0.0 : (now - lastTime) * 1000.0
+            var newPeak = peakIAT
+            if iterIat > newPeak { newPeak = iterIat }
+
             if let content = content {
-                continuation?.yield(Data(content))
+                continuation?.yield((Data(content), newPeak))
+                newPeak = 0
             }
             if error == nil {
-                self.receiveUnicast(connection: connection, continuation: continuation)
+                self.receiveUnicast(connection: connection, continuation: continuation, lastTime: now, peakIAT: newPeak)
             }
         }
     }
@@ -290,19 +351,20 @@ public actor UDPIngestor {
             
             let chunkSize = 65536
             var keepReading = true
+            var lastReadTime: Double = 0
+            
             while keepReading {
                 if Task.isCancelled { break }
                 autoreleasepool {
                     let data = fileHandle.readData(ofLength: chunkSize)
                     if data.count > 0 {
-                        Task { @MainActor in
-                            // Note: continuation belongs to actor, yielding is fine conceptually.
-                            // However, we just yield here securely.
-                        }
-                        continuation?.yield(data)
-                        // Artificial delay to simulate real-time ingestion instead of blasting instantly
-                        // 65KB chunk approx = a few ms of typical video. Using a very short sleep.
-                        usleep(1000) 
+                        let now = CFAbsoluteTimeGetCurrent()
+                        let loopIat = (lastReadTime == 0) ? 0.0 : (now - lastReadTime) * 1000.0
+                        lastReadTime = now
+                        
+                        continuation?.yield((data, loopIat))
+                        // To simulate UDP micro-stutter timing delays natively for offline testing:
+                        usleep(1000)
                     } else {
                         keepReading = false
                     }
@@ -312,9 +374,13 @@ public actor UDPIngestor {
         }
     }
     
-    private func handleData(_ data: Data) {
-        lastPacketTime = Date().timeIntervalSince1970
-        packetCount += 1
+    private func handleData(_ data: Data, packetIat: Double) {
+        if packetIat > windowMaxIAT {
+            windowMaxIAT = packetIat
+        }
+        
+        self.lastPacketTime = Date().timeIntervalSince1970
+        self.packetCount += data.count / 188
         if packetCount % 50 == 0 {
             onPacketCallback?(packetCount)
         }
@@ -382,8 +448,14 @@ public actor UDPIngestor {
         }
     }
     
-    fileprivate func forwardFrame(_ frame: CVPixelBuffer, audio: AudioHealth) {
-        onFrameCallback?(frame, audio)
+    public func captureAndResetIAT() -> Double {
+        let iat = windowMaxIAT
+        windowMaxIAT = 0.0
+        return iat
+    }
+    
+    fileprivate func forwardFrame(_ frame: CVPixelBuffer, audio: AudioHealth, networkIAT: Double) {
+        onFrameCallback?(frame, audio, networkIAT)
     }
     
 
@@ -434,3 +506,11 @@ fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
         }
     }
 }
+
+#if DEBUG
+extension UDPIngestor {
+    public func _injectDataForTest(_ data: Data, packetIat: Double) {
+        self.handleData(data, packetIat: packetIat)
+    }
+}
+#endif

@@ -32,7 +32,7 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
    - **Stateless Zero-Shot Inference**: To completely eliminate ambient GPU and Core processing overhead, the VLM operates entirely on-demand. Background cache polling has been disabled. When OpenCV escalates a potential incident, the Native VLM instantly reconstructs its MLX context utilizing raw snapshot frames directly from the hardware HEIC ring buffer. This enforces a strict zero-shot architectural boundary, preventing any hallucinated context leakage between isolated broadcast corruptions.
 
 4. **Telemetry Logging (`SwiftData` & Rate Limiting)**:
-   - **Forensic Frame Metrics**: Enhanced diagnostic telemetry now tracks precise `IAT` (Inter-Arrival Time) to identify frame-by-frame UDP ingest or decoding bottlenecks, and automatically logs computer vision JSON `boundingBoxes` payload geometries. These metrics dynamically generate UI visual badges (like red `IAT: 45ms` spikes) and render contextual anomaly overlays.
+   - **Forensic Frame Metrics**: Enhanced diagnostic telemetry now tracks precise `IAT` (Inter-Arrival Time) natively at the raw `UDPIngestor` socket boundary. To guarantee absolute sub-millisecond precision irrespective of Swift thread-pool execution delays, the core engine leverages **Hardware-Level Kernel Timestamping** via Unix `SO_TIMESTAMP` in `recvmsg()`. This enables the extraction of `cmsghdr` payload timestamps directly from the physical Network Interface Card (NIC) interrupts—accurately logging true physical packet jitter without artificially skewing our 1-FPS forensic extraction timing or being choked by high-CPU process scheduler starvation.
    - The application relies entirely on Apple’s **SwiftData** framework, bypassing third-party ORMs like Vapor’s Fluent. 
    - Uses the `@Model` macro to asynchronously inject `VideoLog` definitions natively into local `ModelContext`, triggering `@Observable` view rebuilds flawlessly across threads.
    - **Intelligent Rate Limiting**: To prevent dashboard starvation and database clutter, "OK" health telemetry events are smartly suppressed using deterministic Wall-Clock Delta Tracking. OK events are mandated to emit strictly every 10 real-world minutes during prolonged periods of normal operation. The engine implements strict state tracking using mandatory 3-second safety buffers following initial startups or immediate incident recoveries to combat erratic telemetry flapping.
@@ -52,15 +52,18 @@ Your system must have:
 - **Hugging Face Account**: The vision pipeline relies on native `mlx-swift` to run Gemma 4 models.
   - You must accept the Gemma model agreements on [Hugging Face](https://huggingface.co/google/gemma-4-e2b-mlx-4bit).
   - You must generate a Hugging Face Access Token (with "Read" permissions).
-  - Open the Eyes on Glass application and enter this token into the "Hugging Face Token" secure field to download and prepare the models natively.
-
+  - Before compiling the application, you must export your token as an environment variable (`export HF_TOKEN="your_token"`). The build script will automatically securely download the 6GB Gemma model natively into the `.app` bundle, allowing the interface to function completely offline without asking the user for API keys!
+ 
 ### 2. Run the Application natively (macOS)
 
 You do not need an Xcode project (`.xcodeproj`) file! Modern Xcode securely comprehends the `Package.swift` hierarchy perfectly.
 
-1. Open a terminal and run:
+1. Open a terminal and run the initial model download script:
    ```bash
-   open -a Xcode mac-frontend/Package.swift
+   cd mac-frontend
+   export HF_TOKEN="your_huggingface_read_token"
+   ./Scripts/download_model.sh
+   open -a Xcode Package.swift
    ```
 2. Wait a brief moment for Xcode to recursively resolve the internal package graph.
 3. In the top toolbar, ensure the Scheme is set to **`EyesOnGlass`** (the tool icon) and the target destination is set to **`My Mac`**.

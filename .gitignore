@@ -37,3 +37,9 @@ test_pipeline.py
 
 # Test Results
 battery-test-results/
+
+# Local Virtual Environments
+mac-frontend/.hf_venv/
+
+# Large ML Weights / Generated Assets
+mac-frontend/Sources/EyesOnGlass/GemmaModel/

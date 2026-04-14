@@ -127,39 +127,21 @@ public final class NativeVLMClient {
     private init() {}
     
     @MainActor
-    public func prepareModel(tier: GemmaModelTier, token: String? = nil) async {
-        self.selectedTier = tier
-        
-        let requiredMemory: UInt64
-        switch tier {
-        case .e4b: requiredMemory = 6_000_000_000
-        }
-        
+    public func prepareModel() async {
+        let requiredMemory: UInt64 = 6_000_000_000
         let availableMemory = ProcessInfo.processInfo.physicalMemory
         if availableMemory < requiredMemory {
-            self.state = .error("Insufficient Unified Memory for \(tier.displayName)")
+            self.state = .error("Insufficient Unified Memory for Gemma 4 E4B")
             return
         }
         
-        if token?.isEmpty ?? true {
-            self.state = .error("A valid Hugging Face token is required to download Gemma models.")
-            return
-        }
-        
-        self.state = .downloading(progress: 0.0)
+        self.state = .loadingToMemory
         
         do {
-            let hub = HubApi(hfToken: token?.isEmpty == false ? token : nil)
-            let repo = Hub.Repo(id: tier.rawValue)
-            
-            // In reality, we'd use the snapshot endpoint
-            let modelDir = try await hub.snapshot(from: repo) { progress in
-                Task { @MainActor in
-                    self.state = .downloading(progress: progress.fractionCompleted)
-                }
+            guard let modelDir = Bundle.module.url(forResource: "GemmaModel", withExtension: nil) else {
+                self.state = .error("Model files not found in app bundle. Was the build script run?")
+                return
             }
-            
-            self.state = .loadingToMemory
             
             self.modelContainer = try await VLMModelFactory.shared.loadContainer(
                 from: modelDir,

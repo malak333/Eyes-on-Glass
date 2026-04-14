@@ -52,9 +52,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
             fputs("==================================\n", stderr)
             
             // Re-configure the NativeVLMClient instance for the current tier
-            // We use a simulated token since it's a simulated MLX framework for now.
-            let hfToken = ProcessInfo.processInfo.environment["HF_TOKEN"] ?? "mock_token"
-            await NativeVLMClient.shared.prepareModel(tier: tier, token: hfToken)
+            await NativeVLMClient.shared.prepareModel()
             fputs("VLM State after prepareModel: \(NativeVLMClient.shared.state)\n", stderr)
             
             for filename in videoFiles {

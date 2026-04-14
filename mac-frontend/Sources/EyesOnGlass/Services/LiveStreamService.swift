@@ -145,9 +145,9 @@ actor LiveStreamService {
         self.ingestor = newIngestor
         
         Task(priority: .userInitiated) {
-            await newIngestor.start(uri: uri, onFrame: { pixelBuffer, audioHealth in
+            await newIngestor.start(uri: uri, onFrame: { pixelBuffer, audioHealth, networkIAT in
                 Task(priority: .userInitiated) {
-                    await self.processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
+                    await self.processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, networkIAT: networkIAT, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
                 }
             }, onVideoFrame: { pixelBuffer in
                 self.visualsRenderer.render(pixelBuffer: pixelBuffer)
@@ -248,7 +248,7 @@ actor LiveStreamService {
         await ingestor?.setMuted(muted)
     }
     
-    private func processFrame(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, sessionName: String, thumbnailsDir: URL, ) async {
+    private func processFrame(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, networkIAT: Double, sessionName: String, thumbnailsDir: URL) async {
         guard isActive, sessionName == activeSessionName else { return }
         
         let now = Date().timeIntervalSince1970
@@ -256,7 +256,7 @@ actor LiveStreamService {
         frameCount += 1
         
         let nowTime = CFAbsoluteTimeGetCurrent()
-        let iatMs = (lastFrameProcessTime == 0) ? 0.0 : (nowTime - lastFrameProcessTime) * 1000.0
+        let iatMs = networkIAT
         lastFrameProcessTime = nowTime
         
         let localController = self.streamController
@@ -569,8 +569,8 @@ actor LiveStreamService {
     
 #if DEBUG
     // MARK: - Test Infrastructure
-    func _injectFrameForTest(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, sessionName: String, thumbnailsDir: URL) async {
-        await processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
+    func _injectFrameForTest(pixelBuffer: CVPixelBuffer, audioHealth: AudioHealth, networkIAT: Double, sessionName: String, thumbnailsDir: URL) async {
+        await processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, networkIAT: networkIAT, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
     }
     
     func _getAudioLossStartTime() -> TimeInterval? {

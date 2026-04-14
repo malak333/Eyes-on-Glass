@@ -24,6 +24,9 @@ let package = Package(
                 .product(name: "Hub", package: "swift-transformers"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "MLXVLM", package: "mlx-swift-lm")
+            ],
+            resources: [
+                .copy("GemmaModel")
             ]
         ),
         .testTarget(

@@ -165,7 +165,7 @@ final class StreamController: Identifiable, Hashable {
                             self.streamFramesAnalyzed = prog.current
                             
                             let dur = max(self.streamDuration, 1.0)
-                            self.streamBitrate = Double(self.streamPackets) * 1316.0 * 8.0 / dur / 1_000_000.0
+                            self.streamBitrate = Double(self.streamPackets) * 188.0 * 8.0 / dur / 1_000_000.0
                             
                             
                             if self.streamDuration > 2.0 {
@@ -239,7 +239,7 @@ final class StreamController: Identifiable, Hashable {
     }
     
     internal func updateBitrateHistory(delta: Int, elapsed: TimeInterval) {
-        let instBitrate = Double(delta) * 1316.0 * 8.0 / elapsed / 1_000_000.0
+        let instBitrate = Double(delta) * 188.0 * 8.0 / elapsed / 1_000_000.0
         if instBitrate > 0.1 {
             self.bitrateHistory.append(instBitrate)
             if self.bitrateHistory.count > 10 {

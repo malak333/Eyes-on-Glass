@@ -381,8 +381,6 @@ struct ConnectionSectionView: View {
     @Bindable var streamController: StreamController
     var modelContext: ModelContext
     @AppStorage("streamUri") private var streamUri: String = "udp://239.0.0.1:1234"
-    @State private var hfToken: String = ""
-    @State private var loadedToken: String = ""
     @State private var localUri: String = ""
     @State private var vlmClient = NativeVLMClient.shared
     
@@ -394,56 +392,23 @@ struct ConnectionSectionView: View {
                 .disabled(streamController.connectionStatus == "Active")
                 .onAppear {
                     localUri = streamUri
-                    if let token: String = KeychainHelper.standard.read(service: "com.eyeson.hftoken", account: "user") {
-                        loadedToken = token
-                        hfToken = token
+                    if case .notLoaded = vlmClient.state {
+                        Task { await vlmClient.prepareModel() }
                     }
                 }
                 .onChange(of: localUri) { oldValue, newValue in
                     streamUri = newValue
                 }
-                
-            SecureField("Hugging Face Token", text: $hfToken)
-                .textFieldStyle(.roundedBorder)
-                .disabled(streamController.connectionStatus == "Active")
-                .onChange(of: hfToken) { oldValue, newValue in
-                    guard newValue != loadedToken else { return }
-                    loadedToken = newValue
-                    if newValue.isEmpty {
-                        KeychainHelper.standard.delete(service: "com.eyeson.hftoken", account: "user")
-                    } else {
-                        KeychainHelper.standard.save(newValue, service: "com.eyeson.hftoken", account: "user")
-                    }
-                }
-                
-            Picker("AI Model", selection: Binding(
-                get: { vlmClient.selectedTier },
-                set: { tier in
-                    Task {
-                        await vlmClient.prepareModel(tier: tier, token: hfToken)
-                    }
-                }
-            )) {
-                ForEach(GemmaModelTier.allCases) { tier in
-                    Text(tier.displayName).tag(tier)
-                }
-            }
-            .disabled(streamController.connectionStatus == "Active")
             
             switch vlmClient.state {
             case .notLoaded:
-                Button(action: {
-                    let tier = vlmClient.selectedTier
-                    Task { await vlmClient.prepareModel(tier: tier, token: hfToken) }
-                }) {
-                    Text("Download & Prepare Model")
-                        .frame(maxWidth: .infinity)
+                ProgressView() {
+                    Text("Initializing...")
+                        .font(.caption)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
             case .downloading(let progress):
                 ProgressView(value: progress) {
-                    Text("Downloading Model... \(Int(progress * 100))%")
+                    Text("Loading Model... \(Int(progress * 100))%")
                         .font(.caption)
                 }
             case .loadingToMemory:
@@ -457,8 +422,7 @@ struct ConnectionSectionView: View {
                     .foregroundColor(.red)
                     .multilineTextAlignment(.center)
                 Button(action: {
-                    let tier = vlmClient.selectedTier
-                    Task { await vlmClient.prepareModel(tier: tier, token: hfToken) }
+                    Task { await vlmClient.prepareModel() }
                 }) {
                     Text("Retry Prepare Model")
                         .frame(maxWidth: .infinity)

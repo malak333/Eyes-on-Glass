@@ -29,7 +29,7 @@ final class LiveMulticastLoadTest: XCTestCase {
         
         await ingestor.start(
             uri: "udp://127.0.0.1:45678",
-            onFrame: { _, _ in },
+            onFrame: { _, _, _ in },
             onVideoFrame: { _ in Task { await metrics.addFrame() } },
             onAudioVisuals: { _, _, _, _ in },
             onPacket: { count in Task { await metrics.updatePackets(count) } }

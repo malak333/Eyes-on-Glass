@@ -54,7 +54,7 @@ final class LiveStreamServiceTests: XCTestCase {
         XCTAssertNil(wasHealthy, "Should be completely nil before receiving a frame")
         
         // Simulate healthy frame
-        await service._injectFrameForTest(pixelBuffer: dummyPixelBuffer, audioHealth: .healthy, sessionName: session, thumbnailsDir: tempDir)
+        await service._injectFrameForTest(pixelBuffer: dummyPixelBuffer, audioHealth: .healthy, networkIAT: 0.0, sessionName: session, thumbnailsDir: tempDir)
         
         wasHealthy = await service._getWasAudioHealthy()
         var startTime = await service._getAudioLossStartTime()
@@ -64,7 +64,7 @@ final class LiveStreamServiceTests: XCTestCase {
         // ------------------
         // Simulate dropping audio briefly
         // ------------------
-        await service._injectFrameForTest(pixelBuffer: dummyPixelBuffer, audioHealth: .silent, sessionName: session, thumbnailsDir: tempDir)
+        await service._injectFrameForTest(pixelBuffer: dummyPixelBuffer, audioHealth: .silent, networkIAT: 0.0, sessionName: session, thumbnailsDir: tempDir)
         
         wasHealthy = await service._getWasAudioHealthy()
         startTime = await service._getAudioLossStartTime()
@@ -75,7 +75,7 @@ final class LiveStreamServiceTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 2_100_000_000)
         
         // Let's supply another silent frame bridging past the threshold
-        await service._injectFrameForTest(pixelBuffer: dummyPixelBuffer, audioHealth: .silent, sessionName: session, thumbnailsDir: tempDir)
+        await service._injectFrameForTest(pixelBuffer: dummyPixelBuffer, audioHealth: .silent, networkIAT: 0.0, sessionName: session, thumbnailsDir: tempDir)
         
         wasHealthy = await service._getWasAudioHealthy()
         XCTAssertEqual(wasHealthy, false, "After > 2 seconds of silence, it should transition to false logic")

@@ -43,3 +43,4 @@ for CONF in debug release; do
 done
 
 echo "Metal shaders successfully injected into SPM environments."
+
