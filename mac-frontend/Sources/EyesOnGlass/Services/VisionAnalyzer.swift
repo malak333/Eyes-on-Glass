@@ -14,9 +14,19 @@ struct ValidationMetrics: Sendable {
     var isBars: Bool
     var isSnowflakes: Bool
     var anomalyBoundingBoxes: [CGRect]
+    var isGraphic: Bool
     
     var isDefinitivelyMacroblocked: Bool {
-        return macroConfidence >= 0.15 && laplacianVariance > 15.0 && anomalyBoundingBoxes.count >= 3
+        // Exclude fade-to-black/dark scenes which falsely boost codec blockiness
+        let isDarkScene = meanBrightness < 25.0
+        
+        let hasBaseMacro = macroConfidence >= 0.35 && laplacianVariance > 15.0 && anomalyBoundingBoxes.count >= 4
+        
+        // If the macroblocking signal is exceptionally strong, it overrides the graphic gate false-positives
+        // We set these thresholds exceptionally high so sharp text animations on slates don't trigger it
+        let hasSevereMacro = anomalyBoundingBoxes.count >= 20 || blockiness > 4.0
+        
+        return hasBaseMacro && (!isGraphic || hasSevereMacro) && !isDarkScene
     }
 }
 
@@ -44,7 +54,7 @@ struct VisionAnalyzer: Sendable {
         let height = Int(sourceBuffer.height)
         
         if width < 16 || height < 16 {
-            return ValidationMetrics(meanBrightness: 0, isBlackScreen: false, laplacianVariance: 0, isBlurry: false, blockiness: 1.0, macroConfidence: 0.0, hasTopArtifact: false, isBars: false, isSnowflakes: false, anomalyBoundingBoxes: [])
+            return ValidationMetrics(meanBrightness: 0, isBlackScreen: false, laplacianVariance: 0, isBlurry: false, blockiness: 1.0, macroConfidence: 0.0, hasTopArtifact: false, isBars: false, isSnowflakes: false, anomalyBoundingBoxes: [], isGraphic: false)
         }
         
         var sum: Float = 0
@@ -53,6 +63,7 @@ struct VisionAnalyzer: Sendable {
         var lapSum: Float = 0
         var lapSqSum: Float = 0
         var lapCount = 0
+        var zeroGradientCount = 0
         
         var topLapSum: Float = 0
         var topLapSqSum: Float = 0
@@ -102,6 +113,10 @@ struct VisionAnalyzer: Sendable {
                     lapSum += lap
                     lapSqSum += lap * lap
                     lapCount += 1
+                    
+                    if abs(lap) <= 2.0 {
+                        zeroGradientCount += 1
+                    }
                     
                     if y < 10 {
                         topLapSum += lap
@@ -211,6 +226,9 @@ struct VisionAnalyzer: Sendable {
         
         let isSnowflakes = stdDev > 30.0 && laplacianVar > 2000.0 && blockiness < 2.0 && (max(varX, varY) > 0 ? abs(varX - varY) / max(varX, varY) < 0.2 : false)
         
+        let flatnessRatio = Float(zeroGradientCount) / Float(max(1, lapCount))
+        let isGraphic = flatnessRatio > 0.15 && meanBrightness > 5.0
+        
         var anomalyBoundingBoxes: [CGRect] = []
         let macroConf = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
         if macroConf > 0.05 && laplacianVar > 15.0 {
@@ -227,7 +245,8 @@ struct VisionAnalyzer: Sendable {
             hasTopArtifact: hasTopArtifact,
             isBars: isBars,
             isSnowflakes: isSnowflakes,
-            anomalyBoundingBoxes: anomalyBoundingBoxes
+            anomalyBoundingBoxes: anomalyBoundingBoxes,
+            isGraphic: isGraphic
         )
     }
     

@@ -76,7 +76,7 @@ final class BatteryIntegrationTests: XCTestCase {
             try fileManager.copyItem(at: fileURL, to: destURL)
             
             // 6. Execute offline extraction synchronously
-            await ExtractionService.extractAndAnalyze(filename: filename, streamController: StreamController())
+            await SimulatedLiveService.streamAndAnalyze(filename: filename, baseDirectory: baseDirectory, streamController: StreamController())
             
             // 7. Database Interrogation
             let fetchDescriptor = FetchDescriptor<VideoLog>()

@@ -27,10 +27,11 @@ The platform architecture is unified into a single SwiftUI macOS Application Pac
 3. **Analysis Engine (Hybrid VLM Pipeline & Gemma 4 E4B)**:
    - To optimize extreme performance, the application implements a **Hybrid VLM Pipeline** pairing classical computer vision heuristics natively with State-of-the-Art Generative AI.
    - **OpenCV Junior Pre-Filter**: Streams frames concurrently via standard Swift `Actor` execution loops. Fast heuristics (like Laplacian variance and blockiness calculations) actively monitor stream health without invoking the LLM. This filter executes natively against Apple's unified memory (zero-copy via `vImage`), completely bypassing SSD disk I/O unless an anomaly dictates a persistent flush.
+   - **Zero-Gradient Density Graphic Gate**: To explicitly exclude false-positives caused by full-screen broadcast graphics (like commercial slates), the OpenCV pipeline computes mathematical pixel flatness natively. If a frame consists of over 15% zero-gradient regions (or if the scene is exceptionally dark), the pipeline suppresses primitive macroblocking heuristics to bypass aggressive codec artifacts.
    - **Hardware-Accelerated Ring Buffer**: A persistent 30-frame visual trail is dynamically maintained in memory. To minimize overhead and dramatically scale throughput, raw `CVPixelBuffer` frames are synchronously encoded into HEIC (High-Efficiency Image Container) formats utilizing Apple's M4/M5 hardware Media Engine. When an anomaly is identified, these highly-compressed HEIC bytes are securely flushed directly to disk without any secondary, redundant JPEG software trans-coding (completely eliminating "Synchronous Dual Image Compression").
-   - **Gemma 4 "Senior Engineer" Validations**: Only when the OpenCV Pre-Filter exceeds explicit variance thresholds is the **Native AI Analyzer** triggered. An exclusive `mlx-swift` ChatSession pipeline interfaces with the dense `Gemma 4 E4B` tier (running natively in Unified Memory via Hugging Face Hub downloads) to thoroughly inspect the frame, evaluating whether the identified artifacts correctly represent genuine broadcast anomalies.
+   - **Gemma 4 "Senior Engineer" Validation Arbitration**: When the VLM takes over the sequence evaluation natively, it strictly arbitrates all visual fidelity issues. The pipeline automatically strips primitive OpenCV spatial anomalies (e.g., OpenCV macroblocking false-positives), ensuring the LLM acts as the absolute single source-of-truth for visual payloads without polluting the database with duplicate transient telemetry.
    - **Stateless Zero-Shot Inference**: To completely eliminate ambient GPU and Core processing overhead, the VLM operates entirely on-demand. Background cache polling has been disabled. When OpenCV escalates a potential incident, the Native VLM instantly reconstructs its MLX context utilizing raw snapshot frames directly from the hardware HEIC ring buffer. This enforces a strict zero-shot architectural boundary, preventing any hallucinated context leakage between isolated broadcast corruptions.
-
+   - **Consecutive Frame Arbitration**: For rapid anomalies like macroblocking, transient encoder artifacts often masquerade as stream errors (e.g., standard commercial flash-fades or transitions). To aggressively combat false-positives, the analysis engine introduces a **two-frame consecutive threshold**. A first VLM validation places the framework into an active "pending" state. It requires a contiguous second frame to also be mathematically confirmed offline or live (at an adjusted 5 FPS extraction sampling rate) before the `StreamController` logs the incident to the forensic database.
 4. **Telemetry Logging (`SwiftData` & Rate Limiting)**:
    - **Forensic Frame Metrics**: Enhanced diagnostic telemetry now tracks precise `IAT` (Inter-Arrival Time) natively at the raw `UDPIngestor` socket boundary. To guarantee absolute sub-millisecond precision irrespective of Swift thread-pool execution delays, the core engine leverages **Hardware-Level Kernel Timestamping** via Unix `SO_TIMESTAMP` in `recvmsg()`. This enables the extraction of `cmsghdr` payload timestamps directly from the physical Network Interface Card (NIC) interrupts—accurately logging true physical packet jitter without artificially skewing our 1-FPS forensic extraction timing or being choked by high-CPU process scheduler starvation.
    - The application relies entirely on Apple’s **SwiftData** framework, bypassing third-party ORMs like Vapor’s Fluent. 
@@ -73,16 +74,20 @@ The glassmorphic macOS application will appear instantly, granting you access to
 
 ### 3. Automated Validation Framework (CLI Battery Test)
 
-In accordance with our Code-Style Guidelines (Autonomous Execution, Testing, and Quality Standards), the project features a fully decoupled, headless `Executable` testing harness designed to ingest raw streams and perform asynchronous MLX-VLM inferences iteratively against actual MLX Gemma model weights. 
+In accordance with our Code-Style Guidelines (Autonomous Execution, Testing, and Quality Standards), the project features a fully decoupled, headless `Executable` testing harness designed to validate anomalies. 
 
-To execute the validation engine natively against the `.e4b` MLX architecture locally, supply your Hugging Face Authentication Token as an environment variable to securely fetch tensors from the Hub:
+**True Live Simulation:** The offline extraction logic has been replaced entirely with `SimulatedLiveService`. Rather than slicing static files to disk, the validation engine now securely boots a background FFmpeg instance and broadcasts local video sets directly into Apple's Network Framework at exactly 1x real-time speed. This fundamentally guarantees that CLI battery tests execute against the exact same UDP payload dynamics, memory limits, and timing constraints as production live streams.
+
+**Asynchronous VLM Hold Telemetry:** To accurately replicate the non-blocking execution of the background MLX Large Language Model validation, the CLI runner injects a trailing wait mechanism (`isStageAVerifying`). Tests are guaranteed to remain indefinitely blocked and will not export logs or automatically truncate local background extraction loops if a suspected visual incident (e.g. macroblocking) has tripped an async evaluation, resolving intermittent test result disparities.
+
+To execute the validation engine natively against the `.e4b` MLX architecture locally, supply your Hugging Face Authentication Token as an environment variable:
 ```bash
 cd mac-frontend
 swift build
 ./Scripts/build_metal_shaders.sh # Required: Compiles Native MLX Metal Shaders
 ANALYSIS_CLI=true HF_TOKEN="your_huggingface_read_token" ./.build/debug/EyesOnGlass --cli
 ```
-*(This directly pipes all telemetry and VLM output payload evaluations into a standalone `analysis_results.json` log for review.)*
+*(This directly pipes all live-streaming telemetry and VLM evaluations into a standalone `analysis_results/analysis_results_<timestamp>.json` log upon completion of the stream broadcast.)*
 
 ### 4. Packaging the Application for Distribution
 

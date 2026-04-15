@@ -74,8 +74,8 @@ public actor StreamMonitor {
     private func evaluateIntegrity(pts: Int64, video: VideoHealth, audio: AudioHealth) {
         let shouldProcess: Bool
         if let last = lastProcessedPTS {
-            // Check if 1 second elapsed (90,000 ticks), or if PTS jumped backwards (stream loop/reset)
-            shouldProcess = (pts - last >= 90000) || (pts < last - 90000)
+            // Check if 200ms elapsed (18,000 ticks = 5 FPS), or if PTS jumped backwards (stream loop/reset)
+            shouldProcess = (pts - last >= 18000) || (pts < last - 18000)
             
             if !shouldProcess {
                 skipCount += 1

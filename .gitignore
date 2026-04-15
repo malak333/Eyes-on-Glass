@@ -34,6 +34,7 @@ Thumbs.db
 
 # Temp files
 test_pipeline.py
+scratch/
 
 # Test Results
 battery-test-results/
@@ -43,3 +44,6 @@ mac-frontend/.hf_venv/
 
 # Large ML Weights / Generated Assets
 mac-frontend/Sources/EyesOnGlass/GemmaModel/
+
+# Analysis Results
+analysis_results/

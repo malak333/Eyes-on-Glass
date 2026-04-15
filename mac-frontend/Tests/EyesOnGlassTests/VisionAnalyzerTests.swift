@@ -53,4 +53,50 @@ final class VisionAnalyzerTests: XCTestCase {
             print("HEIC encoder returned nil. This may be expected on systems lacking a hardware HEIC encoder.")
         }
     }
+    
+    func testGraphicGateIdentification() throws {
+        // Create a 100x100 pixel buffer simulating a high-contrast, flat graphic
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, 100, 100, kCVPixelFormatType_32BGRA, nil, &pixelBuffer)
+        XCTAssertEqual(status, kCVReturnSuccess)
+        guard let pb = pixelBuffer else {
+            XCTFail("Failed to create pixel buffer")
+            return
+        }
+        
+        // Fill the top half with pure blue and the bottom half with pure red
+        // This ensures laplacian == 0 almost everywhere, but stdDev is extremely high
+        CVPixelBufferLockBaseAddress(pb, [])
+        if let baseAddress = CVPixelBufferGetBaseAddress(pb) {
+            let bytesPerRow = CVPixelBufferGetBytesPerRow(pb)
+            
+            for y in 0..<100 {
+                let rowData = baseAddress.advanced(by: y * bytesPerRow).assumingMemoryBound(to: UInt8.self)
+                for x in 0..<100 {
+                    let pixelOffset = x * 4
+                    if y < 50 {
+                        rowData[pixelOffset] = 255     // B
+                        rowData[pixelOffset+1] = 0     // G
+                        rowData[pixelOffset+2] = 0     // R
+                        rowData[pixelOffset+3] = 255   // A
+                    } else {
+                        rowData[pixelOffset] = 0       // B
+                        rowData[pixelOffset+1] = 0     // G
+                        rowData[pixelOffset+2] = 255   // R
+                        rowData[pixelOffset+3] = 255   // A
+                    }
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pb, [])
+        
+        let ciImage = CIImage(cvPixelBuffer: pb)
+        let context = CIContext(options: [.cacheIntermediates: false])
+        
+        let cvResults = VisionAnalyzer.analyze(ciImage: ciImage, context: context)
+        
+        XCTAssertNotNil(cvResults)
+        XCTAssertTrue(cvResults!.isGraphic, "Expected image composed of huge solid color blocks to be flagged as a graphic.")
+        XCTAssertFalse(cvResults!.isDefinitivelyMacroblocked, "Graphic frames should unconditionally suppress macroblocking triggers.")
+    }
 }

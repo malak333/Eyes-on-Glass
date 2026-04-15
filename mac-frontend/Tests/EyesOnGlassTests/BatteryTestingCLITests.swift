@@ -14,12 +14,20 @@ final class BatteryTestingCLITests: XCTestCase {
             try? FileManager.default.removeItem(at: tempDir)
         }
         
+        let outputDirURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("analysis_results")
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: outputDirURL.path) {
+            for file in contents where file.hasPrefix("test_analysis_results_") {
+                try? FileManager.default.removeItem(at: outputDirURL.appendingPathComponent(file))
+            }
+        }
+        
         // Execute the CLI runner using the mock directory and in test mode to minimize execution overhead
         await BatteryTestingCLI.run(baseDirectory: tempDir.path, isTestMode: true)
         
         // If it returns successfully without crashing or hanging, execution loops are syntactically sound
-        let resultsOutput = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("analysis_results.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: resultsOutput.path), "The CLI should generate an analysis_results.json even if empty.")
+        let newContents = try? FileManager.default.contentsOfDirectory(atPath: outputDirURL.path)
+        let resultsFile = newContents?.first(where: { $0.hasPrefix("test_analysis_results_") })
+        XCTAssertNotNil(resultsFile, "The CLI should generate a test_analysis_results JSON file even if empty.")
     }
     
     @MainActor
@@ -37,9 +45,21 @@ final class BatteryTestingCLITests: XCTestCase {
             try "".data(using: .utf8)!.write(to: url)
         }
         
+        let outputDirURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("analysis_results")
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: outputDirURL.path) {
+            for file in contents where file.hasPrefix("test_analysis_results_") {
+                try? FileManager.default.removeItem(at: outputDirURL.appendingPathComponent(file))
+            }
+        }
+        
         await BatteryTestingCLI.run(baseDirectory: tempDir.path, isTestMode: true)
         
-        let resultsOutput = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("analysis_results.json")
+        let newContents = try? FileManager.default.contentsOfDirectory(atPath: outputDirURL.path)
+        guard let resultsFile = newContents?.first(where: { $0.hasPrefix("test_analysis_results_") }) else {
+            XCTFail("Could not find test analysis_results file in directory")
+            return
+        }
+        let resultsOutput = outputDirURL.appendingPathComponent(resultsFile)
         XCTAssertTrue(FileManager.default.fileExists(atPath: resultsOutput.path))
         
         if let data = try? Data(contentsOf: resultsOutput),

@@ -44,7 +44,22 @@ final class NativeVLMClientTests: XCTestCase {
         XCTAssertTrue(prompt.contains("macroblocking"), "Prompt must explicitly mandate the taxonomy identifier 'macroblocking' as the valid JSON key to ensure accurate parsing.")
         
         // Assert json formatting restrictions are imposed on the MLX engine
-        XCTAssertTrue(prompt.contains("valid JSON") && prompt.contains("'issues' mapping"), "Prompt must restrict output to valid JSON utilizing the 'issues' array map. Found: \(prompt)")
+        XCTAssertTrue(prompt.contains("valid JSON") && prompt.contains("schema:"), "Prompt must restrict output to valid JSON utilizing the schema. Found: \(prompt)")
+    }
+    
+    // Feature Implementation Standard: Automated test for the zero-shot algorithmic gate
+    func testStageAPromptAlgorithmicGate() {
+        let prompt = NativeVLMClient.stageAPrompt
+        
+        // Assert that the explicit negative constraints are present
+        XCTAssertTrue(prompt.contains("NOT macroblocking"), "Prompt must establish negative constraints for false-positives.")
+        XCTAssertTrue(prompt.contains("sharp text overlay"), "Prompt must explicitly constrain text overlays.")
+        XCTAssertTrue(prompt.contains("blurriness caused by natural high-speed motion"), "Prompt must explicitly constrain motion blur.")
+        XCTAssertTrue(prompt.contains("compression ringing/noise"), "Prompt must explicitly constrain standard compression ringing/noise around graphics.")
+        
+        // Assert json formatting restrictions and MLX token limits are imposed
+        XCTAssertTrue(prompt.contains("\"detected\": true/false"), "Prompt must explicitly define the expected detected boolean format.")
+        XCTAssertTrue(prompt.contains("maximum 10-word summary"), "Prompt must explicitly constrain the description length to avoid hitting the 140 maxTokens limit during generation.")
     }
     
     @MainActor

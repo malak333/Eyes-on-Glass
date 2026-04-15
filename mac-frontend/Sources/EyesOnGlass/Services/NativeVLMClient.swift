@@ -90,12 +90,12 @@ public final class NativeVLMClient {
     public static let multimodalPrompt = """
     Analyze this sequence of video frames and its perfectly aligned audio buffer for broadcast anomalies.
     You must report ANY detected issues from this precise list:
-    - macroblocking
+    - macroblocking (Severe compression artifacts, blocky digital pixel starvation, or structural tearing. NOTE: do NOT flag clean static broadcast graphics, logos, slates, or fast commercial screen wipes/crossfades as macroblocking, even if they exhibit brief artifacting during the transition.)
     - audio drop out
     - no audio
     - frozen screen
     - black screen
-    - slate
+    - slate (Use this for clean, flat-color broadcast graphics, logos, or station IDs)
     - bars and tone
     - static on video snowflakes
     - lip sync issue
@@ -107,8 +107,17 @@ public final class NativeVLMClient {
     """
     
     public static let stageAPrompt = """
-    Look at the images provided. Focus on the final image. Describe what you see in 1 sentence, specifically whether it exhibits severe macroblocking (large colored visual artifacts, heavy blocky pixelation).
-    Reply exclusively in valid JSON format: {"description": "...", "detected": true/false}.
+    You are an expert video quality auditor. Compare the provided chronologically ordered images (Frame A: Previous, Frame B: Suspected Issue).
+    Your task is to determine if Frame B exhibits severe macroblocking (digital pixel starvation) compared to Frame A.
+
+    Evaluation Gate:
+    1. Is the image a deliberate broadcast graphic, commercial slate, or transition wipe (e.g., flat background, prominent logos, station IDs, text, fading commercial)? If yes, it is NOT macroblocking.
+    2. Does the image display severe, destructive blocky square artifacts that tear apart the underlying video picture? If yes, this IS macroblocking.
+    3. Do NOT reject an image just because the background looks like a flat gradient or texture. 
+    4. Focus heavily on structural tearing and blocky pixel starvation.
+
+    Reply exclusively in valid JSON format. Mentally evaluate the gate, but provide ONLY a concise, maximum 10-word summary of your reasoning in the description.
+    {"description": "...", "detected": true/false}
     """
     
     public static let stageBPrompt = """
@@ -199,10 +208,16 @@ public final class NativeVLMClient {
             fflush(stdout)
             
             var cleanedText = outputText
-            let pattern = "```(?:json)?\\s*([\\s\\S]*?)\\s*```"
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+            let blockPattern = "```(?:json)?\\s*([\\s\\S]*?)\\s*```"
+            let arrayPattern = "(\\[\\s*\\{[\\s\\S]*\\}\\s*\\])"
+            
+            if let regex = try? NSRegularExpression(pattern: blockPattern, options: []),
                let match = regex.firstMatch(in: outputText, options: [], range: NSRange(location: 0, length: outputText.utf16.count)),
                let range = Range(match.range(at: 1), in: outputText) {
+                cleanedText = String(outputText[range])
+            } else if let arrayRegex = try? NSRegularExpression(pattern: arrayPattern, options: []),
+                      let match = arrayRegex.firstMatch(in: outputText, options: [], range: NSRange(location: 0, length: outputText.utf16.count)),
+                      let range = Range(match.range(at: 1), in: outputText) {
                 cleanedText = String(outputText[range])
             }
             cleanedText = cleanedText.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)

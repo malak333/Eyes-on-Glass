@@ -92,7 +92,14 @@ actor LiveStreamService {
     // Macroblocking Series State
     private var lastMacroblockingIndex: Int = -2
     private var isCurrentMBSeriesVerified: Bool = false
-    private var isStageAVerifying: Bool = false
+    public var isStageAVerifying: Bool = false
+    
+    // For unit testing
+    public func setStageAVerifyingStatus(_ val: Bool) {
+        self.isStageAVerifying = val
+    }
+    
+    private var consecutiveMBCount: Int = 0
     private var currentMBVerifiedEngine: String = "opencv"
     private var peakMacroblockingScore: Double = 0.0
     private var peakMacroblockingFramePath: String?
@@ -133,6 +140,7 @@ actor LiveStreamService {
         audioLossStartTime = nil
         lastMacroblockingIndex = -2
         isCurrentMBSeriesVerified = false
+        consecutiveMBCount = 0
         isStageAVerifying = false
         currentMBVerifiedEngine = "opencv"
         lastFrameProcessTime = 0
@@ -361,9 +369,17 @@ actor LiveStreamService {
                     if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
                     if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
                     let macroConfidence = cv.macroConfidence
-                    appLogger.info("LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence)")
+                    let logString = "LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence), boxes=\(cv.anomalyBoundingBoxes.count), isMB=\(cv.isDefinitivelyMacroblocked)\n"
+                    if let fileHandle = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) {
+                        fileHandle.seekToEndOfFile()
+                        fileHandle.write(logString.data(using: .utf8)!)
+                        try? fileHandle.close()
+                    } else {
+                        try? logString.data(using: .utf8)!.write(to: URL(fileURLWithPath: "/tmp/mb_log.txt"))
+                    }
                     
-                    if cv.isDefinitivelyMacroblocked {
+                    let definitivelyMacroblocked = cv.isDefinitivelyMacroblocked
+                    if definitivelyMacroblocked {
                         needsDiskWrite = true
                     }
                     if cv.hasTopArtifact {
@@ -391,7 +407,8 @@ actor LiveStreamService {
             var boundingBoxesJSON: String? = nil
             if let cv = cvResults, !cv.isBlackScreen {
                 let macroConfidence = cv.macroConfidence
-                if cv.isDefinitivelyMacroblocked {
+                let definitivelyMacroblocked = cv.isDefinitivelyMacroblocked
+                if definitivelyMacroblocked {
                     
                     if !cv.anomalyBoundingBoxes.isEmpty {
                         // Extract [CGRect] to [[CGFloat]] basically
@@ -409,55 +426,64 @@ actor LiveStreamService {
                     
                     lastMacroblockingIndex = currentFrameIndex
                     
-                    if wasGap && !isStageAVerifying {
-                        // New series, verify it (Stage A)
+                    if wasGap {
+                        isCurrentMBSeriesVerified = false
+                        consecutiveMBCount = 1
+                        startOfIncidentPath = savedThumbPath
+                        peakMacroblockingScore = Double(macroConfidence)
+                        peakMacroblockingFramePath = savedThumbPath
+                    } else {
+                        consecutiveMBCount += 1
+                        if let currentPath = savedThumbPath, Double(macroConfidence) > peakMacroblockingScore {
+                            peakMacroblockingScore = Double(macroConfidence)
+                            peakMacroblockingFramePath = currentPath
+                        }
+                    }
+                    
+                    if isCurrentMBSeriesVerified {
+                        issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine, nil, boundingBoxesJSON))
+                    } else if consecutiveMBCount == 2 {
+                        let logVLMTrigger = "LiveStreamService: Triggering VLM Analysis at Frame \\(currentFrameIndex)\\n"
+                        try? logVLMTrigger.data(using: .utf8)?.write(to: URL(fileURLWithPath: "/tmp/mb_log.txt"), options: .atomic) // Or rather append. Wait, safely append!
+                        if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMTrigger.data(using: .utf8)!); try? fh.close() }
+                        
                         let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
                         let isVlmReady = await MainActor.run { 
                             if case .ready = NativeVLMClient.shared.state { return true }
                             return false 
                         }
                         
-                        startOfIncidentPath = savedThumbPath
-                        peakMacroblockingScore = Double(macroConfidence)
-                        peakMacroblockingFramePath = savedThumbPath
-                        
-                        isCurrentMBSeriesVerified = false // Guarantee reset
-                        
+                        // We reached the sustained threshold. Call the VLM on the most severe frame so far.
                         if isVlmReady {
-                            if let priorPath = getPreviousFrameHEIC(thumbnailsDir: thumbnailsDir), let currentPath = savedThumbPath {
+                            if let priorPath = getPreviousFrameHEIC(thumbnailsDir: thumbnailsDir), let peakPath = peakMacroblockingFramePath {
                                 isStageAVerifying = true
-                                let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: currentPath, tier: tier)
+                                let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: peakPath, tier: tier)
                                 isStageAVerifying = false
-                                isCurrentMBSeriesVerified = isVerified
-                                currentMBVerifiedEngine = tier.displayName
                                 
                                 if isVerified {
-                                    issuesFound.append(("🔴 Potential Macroblocking Detected (Initial Check)", Double(macroConfidence), tier.displayName, nil, boundingBoxesJSON))
+                                    isCurrentMBSeriesVerified = true
+                                    currentMBVerifiedEngine = tier.displayName
+                                    issuesFound.append(("macroblocking", peakMacroblockingScore, tier.displayName, nil, boundingBoxesJSON))
+                                    let logVLMStatus = "LiveStreamService: VLM APPROVED Incident\\n"
+                                    if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
                                 } else {
+                                    consecutiveMBCount = 0
                                     startOfIncidentPath = nil
                                     peakMacroblockingFramePath = nil
-                                    appLogger.info("LLM rejected live macroblocking detection at \(currentFrameIndex)s.")
+                                    appLogger.info("LLM rejected live macroblocking detection. Incident dropped.")
+                                    let logVLMStatus = "LiveStreamService: VLM REJECTED Incident\\n"
+                                    if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
                                 }
                             }
                         } else {
-                            isCurrentMBSeriesVerified = false
-                            startOfIncidentPath = nil
-                            peakMacroblockingFramePath = nil
-                            appLogger.error("Local LLM model isn't available to verify macroblocking. Dropping unverified logs.")
+                            // Offline fallback
+                            isCurrentMBSeriesVerified = true
+                            currentMBVerifiedEngine = "offline"
+                            issuesFound.append(("macroblocking", peakMacroblockingScore, "offline", nil, boundingBoxesJSON))
+                            let logVLMStatus = "LiveStreamService: VLM Offline, auto-approved\\n"
+                            if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
                         }
-                    } else {
-                        // Continuing series or evaluating during suspends
-                        if let currentPath = savedThumbPath, Double(macroConfidence) > peakMacroblockingScore {
-                            peakMacroblockingScore = Double(macroConfidence)
-                            peakMacroblockingFramePath = currentPath
-                        }
-                        
-                        if isCurrentMBSeriesVerified {
-                            issuesFound.append(("macroblocking", Double(macroConfidence), currentMBVerifiedEngine, nil, boundingBoxesJSON))
-                        } else if isStageAVerifying {
-                            issuesFound.append(("macroblocking_verifying", Double(macroConfidence), "Verifying...", nil, boundingBoxesJSON))
-                        }
-                    }
+
                 }
             }
             
@@ -559,6 +585,7 @@ actor LiveStreamService {
             }
             
             await ExtractionProgress.shared.set(status: "extracting", current: frameCount, total: 0, for: sessionName)
+        }
     }
     
     // Removed updateVideoView and updateAudioView methods

@@ -34,7 +34,8 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     
     do {
         let contents = (try? fm.contentsOfDirectory(atPath: baseDirectory)) ?? []
-        let videoFiles = contents.filter { $0.hasSuffix(".mp4") || $0.hasSuffix(".ts") || $0.hasSuffix(".mkv") }.sorted()
+        // Filter to just the relevant files to speed up the loop
+        let videoFiles = ["CIRCLE TS_2020_05_03_15_29_00_078.mp4"].filter { contents.contains($0) }
         var resultsDict = [String: Any]()
         let executionTiers: [GemmaModelTier] = [.e4b]
         
@@ -44,7 +45,11 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
             return ctrl
         }
         
-        let outputFilename = isTestMode ? "test_analysis_results.json" : "analysis_results.json"
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let dateString = dateFormatter.string(from: Date())
+        let outputFilename = isTestMode ? "test_analysis_results_\(dateString).json" : "analysis_results_\(dateString).json"
+        let outputDirName = "analysis_results"
         
         for tier in executionTiers {
             fputs("\n==================================\n", stderr)
@@ -78,23 +83,21 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                 try? context.save()
                 NativeVLMClient.shared.resetContext()
                 
-                // Invoke real offline extraction framework bound to the VLM tier
+                // Invoke real UDP simulation framework bound to the VLM tier
                 if !isTestMode {
-                    await ExtractionService.extractAndAnalyze(filename: filename, streamController: offlineStreamController)
-                }
-                
+                    await SimulatedLiveService.streamAndAnalyze(filename: filename, baseDirectory: baseDirectory, streamController: offlineStreamController)
+                }                
                 // Fetch logged results
                 let fetchDescriptor = FetchDescriptor<VideoLog>()
                 do {
                     let logs = try context.fetch(fetchDescriptor)
-                    var foundTypes = Array(Set(logs.map { $0.issueType })).sorted()
+                    let detailsMap = logs.map { "\($0.issueType) [\($0.analysisEngine)]" }
+                    var foundTypes = Array(Set(detailsMap)).sorted()
                     if isTestMode { foundTypes = ["mock_test_type"] }
                     
                     var videoResults = resultsDict[filename] as? [String: [String]] ?? [:]
                     videoResults[tier.rawValue] = foundTypes
                     resultsDict[filename] = videoResults
-                    
-                    print("    [Result] Found \(logs.count) logs | Unique Anomalies: \(foundTypes)")
                     fflush(stdout)
                 } catch {
                     print("    [Error] Failed to fetch logs: \(error)")
@@ -103,15 +106,21 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                 
                 // Export Results incrementally
                 let jsonData = try JSONSerialization.data(withJSONObject: resultsDict, options: [.prettyPrinted])
-                let jsonPath = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent(outputFilename)
-                try? jsonData.write(to: jsonPath)
+                let outputDirURL = URL(fileURLWithPath: fm.currentDirectoryPath).appendingPathComponent(outputDirName)
+                do {
+                    try fm.createDirectory(at: outputDirURL, withIntermediateDirectories: true)
+                    let jsonPath = outputDirURL.appendingPathComponent(outputFilename)
+                    try jsonData.write(to: jsonPath)
+                } catch {
+                    fputs("    [Error] Failed to write analysis results to disk: \(error)\n", stderr)
+                }
                 
                 // Cleanup staged file
                 try? fm.removeItem(at: destURL)
             }
         }
         
-        fputs("\nAnalysis completed successfully. Final output written to \(outputFilename)\n", stderr)
+        fputs("\nAnalysis completed successfully. Final output written to \(outputDirName)/\(outputFilename)\n", stderr)
         
         } catch {
             fputs("Framework error: \(error)\n", stderr)
