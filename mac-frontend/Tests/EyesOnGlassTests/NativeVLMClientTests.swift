@@ -62,6 +62,20 @@ final class NativeVLMClientTests: XCTestCase {
         XCTAssertTrue(prompt.contains("maximum 10-word summary"), "Prompt must explicitly constrain the description length to avoid hitting the 140 maxTokens limit during generation.")
     }
     
+    // Feature Implementation Standard: Automated test for black screen temporal gate
+    func testBlackScreenPromptAlgorithmicGate() {
+        let prompt = NativeVLMClient.blackScreenPrompt
+        
+        // Assert that the explicit negative constraints are present
+        XCTAssertTrue(prompt.contains("creative transition"), "Prompt must establish negative constraints for creative transitions.")
+        XCTAssertTrue(prompt.contains("commercial"), "Prompt must explicitly constrain commercial breaks.")
+        XCTAssertTrue(prompt.contains("ending credits"), "Prompt must explicitly constrain ending credits.")
+        
+        // Assert json formatting restrictions
+        XCTAssertTrue(prompt.contains("\"is_technical_failure\": true/false"), "Prompt must explicitly define the expected boolean format.")
+        XCTAssertTrue(prompt.contains("valid JSON format"), "Prompt must restrict output to valid JSON format.")
+    }
+    
     @MainActor
     func testNativeVLMClientZeroShotInitialization() async throws {
         // Validates that the default selected tier strictly utilizes the e4b model

@@ -94,6 +94,12 @@ actor LiveStreamService {
     private var isCurrentMBSeriesVerified: Bool = false
     public var isStageAVerifying: Bool = false
     
+    // Black Screen Detection State
+    private var isCurrentlyBlackScreen: Bool = false
+    private var blackScreenStartTime: TimeInterval? = nil
+    private var preBlackScreenFramePath: String? = nil
+    private var representativeBlackFramePath: String? = nil
+    
     // For unit testing
     public func setStageAVerifyingStatus(_ val: Bool) {
         self.isStageAVerifying = val
@@ -108,6 +114,13 @@ actor LiveStreamService {
     private func getPreviousFrameHEIC(thumbnailsDir: URL) -> String? {
         guard let data = visualRingBuffer.first else { return nil }
         let url = thumbnailsDir.appendingPathComponent("live_prior_\(UUID().uuidString).heic")
+        try? data.write(to: url)
+        return url.path
+    }
+    
+    private func saveCurrentFrameHEIC(thumbnailsDir: URL, currentData: Data?) -> String? {
+        guard let data = currentData else { return nil }
+        let url = thumbnailsDir.appendingPathComponent("live_event_\(UUID().uuidString).heic")
         try? data.write(to: url)
         return url.path
     }
@@ -142,6 +155,10 @@ actor LiveStreamService {
         isCurrentMBSeriesVerified = false
         consecutiveMBCount = 0
         isStageAVerifying = false
+        isCurrentlyBlackScreen = false
+        blackScreenStartTime = nil
+        preBlackScreenFramePath = nil
+        representativeBlackFramePath = nil
         currentMBVerifiedEngine = "opencv"
         lastFrameProcessTime = 0
         visualRingBuffer.removeAll()
@@ -363,9 +380,60 @@ actor LiveStreamService {
 
             if let cv = cvResults {
                 if cv.isBlackScreen {
-                    issuesFound.append(("black_screen", 1.0, "opencv", nil, nil))
-                    needsDiskWrite = true
+                    if !isCurrentlyBlackScreen {
+                        isCurrentlyBlackScreen = true
+                        blackScreenStartTime = nowTime
+                        preBlackScreenFramePath = getPreviousFrameHEIC(thumbnailsDir: thumbnailsDir)
+                        representativeBlackFramePath = saveCurrentFrameHEIC(thumbnailsDir: thumbnailsDir, currentData: currentFrameHEIC)
+                    } else if let startTime = blackScreenStartTime, nowTime - startTime >= 7.0 {
+                        // Timeout reached, this is a technical failure
+                        issuesFound.append(("black_screen", 1.0, "opencv", "Timeout exceeded without recovery", nil))
+                        needsDiskWrite = true
+                        // Reset so we don't spam
+                        isCurrentlyBlackScreen = false
+                        blackScreenStartTime = nil
+                        preBlackScreenFramePath = nil
+                        representativeBlackFramePath = nil
+                    }
                 } else {
+                    if isCurrentlyBlackScreen {
+                        let restorationFramePath = saveCurrentFrameHEIC(thumbnailsDir: thumbnailsDir, currentData: currentFrameHEIC)
+                        
+                        if let prePath = preBlackScreenFramePath, let repPath = representativeBlackFramePath, let endPath = restorationFramePath {
+                            let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
+                            let sessionBackup = sessionName
+                            let indexBackup = currentFrameIndex
+                            let iatMsBackup = iatMs
+                            
+                            Task(priority: .utility) {
+                                let (isFailure, reason) = await NativeVLMClient.shared.analyzeBlackScreenTransition(preFrame: prePath, blackFrame: repPath, endFrame: endPath, tier: tier)
+                                if isFailure {
+                                    appLogger.info("Black screen transition deemed FAILURE by VLM. Logging issue.")
+                                    await self.streamController?.insertVideoLog(
+                                        videoFilename: sessionBackup,
+                                        timestampSec: Double(indexBackup),
+                                        nodeSource: "Live-Multicast",
+                                        nodeBackbone: "East-Backbone-Live",
+                                        nodeDest: "Distribution-Node",
+                                        issueType: "black_screen",
+                                        issueScore: 1.0,
+                                        analysisEngine: tier.displayName,
+                                        thumbnailPath: URL(fileURLWithPath: repPath).lastPathComponent,
+                                        issueSummary: reason,
+                                        iatMs: iatMsBackup
+                                    )
+                                } else {
+                                    appLogger.info("Black screen transition deemed CREATIVE by VLM. Dropping issue.")
+                                }
+                            }
+                        }
+                        
+                        isCurrentlyBlackScreen = false
+                        blackScreenStartTime = nil
+                        preBlackScreenFramePath = nil
+                        representativeBlackFramePath = nil
+                    }
+
                     if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
                     if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
                     let macroConfidence = cv.macroConfidence

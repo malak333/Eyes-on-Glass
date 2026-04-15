@@ -126,6 +126,18 @@ public final class NativeVLMClient {
     Do not output templates, examples, or questions. Reply exactly and only with the final summary string.
     """
     
+    public static let blackScreenPrompt = """
+    You are an expert broadcast video technical analyst. Analyze these three chronologically ordered images (Frame A: Pre-black, Frame B: Black period, Frame C: Post-black restored).
+    Determine if the black screen is a deliberate "creative transition" (e.g. fading to commercial, ending credits, dramatic pause, logo wipe) or a "technical failure" (unintended loss of video signal).
+    
+    Evaluation Gate:
+    1. If Frame C resumes the same content, or cuts cleanly to a commercial, or shows credits fading in/out, it is a creative transition.
+    2. If the black screen appears completely broken or jarring and does not look like a broadcast element, it is a technical failure.
+    
+    Reply exclusively in valid JSON format:
+    {"is_technical_failure": true/false, "reasoning": "brief 1-sentence explanation"}
+    """
+    
     @MainActor public var state: VLMState = .notLoaded
     @MainActor public var selectedTier: GemmaModelTier = .e4b
     
@@ -295,6 +307,40 @@ public final class NativeVLMClient {
             return outputText.isEmpty ? nil : outputText
         } catch {
             return nil
+        }
+    }
+    
+    public func analyzeBlackScreenTransition(preFrame: String, blackFrame: String, endFrame: String, tier: GemmaModelTier) async -> (isFailure: Bool, reason: String) {
+        let isReady = await MainActor.run { 
+            if case .ready = self.state { return true }
+            return false
+        }
+        
+        await MainActor.run { self.resetContext() }
+        
+        guard isReady, let session = self.chatSession else { 
+            return (true, "VLM Offline or not ready") 
+        }
+        
+        do {
+            session.processing = UserInput.Processing(resize: CGSize(width: 512, height: 512))
+            session.generateParameters.maxTokens = 150
+            
+            let userInput = UserInput(prompt: NativeVLMClient.blackScreenPrompt, images: [preFrame, blackFrame, endFrame].map { .url(URL(fileURLWithPath: $0)) })
+            let outputText = try await session.respond(to: NativeVLMClient.blackScreenPrompt, role: .user, images: userInput.images, videos: userInput.videos)
+            
+            fputs("Black Screen VLM Output: \\(outputText)\\n", stderr)
+            
+            let lower = outputText.lowercased()
+            if lower.contains("\"is_technical_failure\": true") || lower.contains("\"is_technical_failure\":true") || lower.contains("\"is_technical_failure\":true,") {
+                return (true, outputText)
+            } else if lower.contains("\"is_technical_failure\": false") || lower.contains("\"is_technical_failure\":false") || lower.contains("\"is_technical_failure\":false,") {
+                return (false, outputText)
+            } else {
+                return (true, outputText)
+            }
+        } catch {
+            return (true, "VLM Inference Exception: \\(error.localizedDescription)")
         }
     }
     
