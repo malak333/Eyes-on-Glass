@@ -360,10 +360,10 @@ actor LiveStreamService {
                 } else {
                     if cv.isBars { issuesFound.append(("bars_and_tone", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
                     if cv.isSnowflakes { issuesFound.append(("snowflakes", 1.0, "opencv", nil, nil)); needsDiskWrite = true }
-                    let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
+                    let macroConfidence = cv.macroConfidence
                     appLogger.info("LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence)")
                     
-                    if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
+                    if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 && cv.anomalyBoundingBoxes.count >= 3 {
                         needsDiskWrite = true
                     }
                     if cv.hasTopArtifact {
@@ -390,8 +390,8 @@ actor LiveStreamService {
             
             var boundingBoxesJSON: String? = nil
             if let cv = cvResults, !cv.isBlackScreen {
-                let macroConfidence = min(1.0, max(0.0, (cv.blockiness - 1.25) / 0.5))
-                if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 {
+                let macroConfidence = cv.macroConfidence
+                if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 && cv.anomalyBoundingBoxes.count >= 3 {
                     
                     if !cv.anomalyBoundingBoxes.isEmpty {
                         // Extract [CGRect] to [[CGFloat]] basically

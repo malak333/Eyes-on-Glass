@@ -9,6 +9,7 @@ struct ValidationMetrics: Sendable {
     var laplacianVariance: Float
     var isBlurry: Bool
     var blockiness: Float
+    var macroConfidence: Float
     var hasTopArtifact: Bool
     var isBars: Bool
     var isSnowflakes: Bool
@@ -39,7 +40,7 @@ struct VisionAnalyzer: Sendable {
         let height = Int(sourceBuffer.height)
         
         if width < 16 || height < 16 {
-            return ValidationMetrics(meanBrightness: 0, isBlackScreen: false, laplacianVariance: 0, isBlurry: false, blockiness: 1.0, hasTopArtifact: false, isBars: false, isSnowflakes: false, anomalyBoundingBoxes: [])
+            return ValidationMetrics(meanBrightness: 0, isBlackScreen: false, laplacianVariance: 0, isBlurry: false, blockiness: 1.0, macroConfidence: 0.0, hasTopArtifact: false, isBars: false, isSnowflakes: false, anomalyBoundingBoxes: [])
         }
         
         var sum: Float = 0
@@ -208,7 +209,7 @@ struct VisionAnalyzer: Sendable {
         
         var anomalyBoundingBoxes: [CGRect] = []
         let macroConf = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
-        if macroConf >= 0.15 && laplacianVar > 15.0 {
+        if macroConf > 0.05 && laplacianVar > 15.0 {
             anomalyBoundingBoxes = extractAnomalyBoundingBoxes(gb: gb, width: width, height: height, rowBytes: rowBytes)
         }
         
@@ -218,6 +219,7 @@ struct VisionAnalyzer: Sendable {
             laplacianVariance: laplacianVar,
             isBlurry: isBlurry,
             blockiness: blockiness,
+            macroConfidence: macroConf,
             hasTopArtifact: hasTopArtifact,
             isBars: isBars,
             isSnowflakes: isSnowflakes,
@@ -311,7 +313,7 @@ struct VisionAnalyzer: Sendable {
                         
                         let blockiness = max(blockX, blockY)
                         let macroConf = min(1.0, max(0.0, (blockiness - 1.25) / 0.5))
-                        if macroConf >= 0.15 {
+                        if macroConf > 0.05 {
                             let rect = CGRect(
                                 x: CGFloat(startX) / CGFloat(width),
                                 y: CGFloat(startY) / CGFloat(height),
