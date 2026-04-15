@@ -503,9 +503,8 @@ struct ExtractionService: Sendable {
                                 issuesFound.append(("snowflakes", 1.0, "opencv"))
                                 videoIssueFound = true
                             }
-                            let macroConfidence = cv.macroConfidence
-                            if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 && cv.anomalyBoundingBoxes.count >= 3 {
-                                issuesFound.append(("macroblocking", Double(macroConfidence), "opencv"))
+                            if cv.isDefinitivelyMacroblocked {
+                                issuesFound.append(("macroblocking", Double(cv.macroConfidence), "opencv"))
                                 videoIssueFound = true
                             }
                             if captureHasLipSync {

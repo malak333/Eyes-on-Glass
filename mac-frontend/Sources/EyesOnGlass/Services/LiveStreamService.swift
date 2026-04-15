@@ -363,7 +363,7 @@ actor LiveStreamService {
                     let macroConfidence = cv.macroConfidence
                     appLogger.info("LiveStreamService MB Check - Frame \(currentFrameIndex): blockiness=\(cv.blockiness), variance=\(cv.laplacianVariance), conf=\(macroConfidence)")
                     
-                    if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 && cv.anomalyBoundingBoxes.count >= 3 {
+                    if cv.isDefinitivelyMacroblocked {
                         needsDiskWrite = true
                     }
                     if cv.hasTopArtifact {
@@ -391,7 +391,7 @@ actor LiveStreamService {
             var boundingBoxesJSON: String? = nil
             if let cv = cvResults, !cv.isBlackScreen {
                 let macroConfidence = cv.macroConfidence
-                if macroConfidence >= 0.15 && cv.laplacianVariance > 15.0 && cv.anomalyBoundingBoxes.count >= 3 {
+                if cv.isDefinitivelyMacroblocked {
                     
                     if !cv.anomalyBoundingBoxes.isEmpty {
                         // Extract [CGRect] to [[CGFloat]] basically

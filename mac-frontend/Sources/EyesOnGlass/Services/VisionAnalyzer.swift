@@ -14,6 +14,10 @@ struct ValidationMetrics: Sendable {
     var isBars: Bool
     var isSnowflakes: Bool
     var anomalyBoundingBoxes: [CGRect]
+    
+    var isDefinitivelyMacroblocked: Bool {
+        return macroConfidence >= 0.15 && laplacianVariance > 15.0 && anomalyBoundingBoxes.count >= 3
+    }
 }
 
 struct VisionAnalyzer: Sendable {
