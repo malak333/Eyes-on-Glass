@@ -34,8 +34,8 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
     
     do {
         let contents = (try? fm.contentsOfDirectory(atPath: baseDirectory)) ?? []
-        // Filter to just the relevant files to speed up the loop
-        let videoFiles = ["CIRCLE TS_2020_05_03_15_29_00_078.mp4"].filter { contents.contains($0) }
+        // Dynamically find all video files for the full battery test
+        let videoFiles = contents.filter { $0.hasSuffix(".mp4") || $0.hasSuffix(".ts") }.sorted()
         var resultsDict = [String: Any]()
         let executionTiers: [GemmaModelTier] = [.e4b]
         

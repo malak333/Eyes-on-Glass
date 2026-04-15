@@ -27,6 +27,7 @@ struct SimulatedLiveService {
         process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg")
         process.arguments = [
             "-re",
+            "-nostdin",
             "-i", fullPath,
             "-c", "copy",
             "-f", "mpegts",
@@ -39,7 +40,9 @@ struct SimulatedLiveService {
         
         do {
             try process.run()
-            process.waitUntilExit()
+            while process.isRunning {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
             
             fputs("FFmpeg EOF Reached. Yielding 3 seconds for buffer flush...\n", stderr)
             
