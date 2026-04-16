@@ -10,6 +10,9 @@ import CoreVideo
 final class StreamController: Identifiable, Hashable {
     let id = UUID()
     private(set) var liveStreamService: LiveStreamService!
+    private let hardwareMonitor = HardwareMonitor()
+    private let bitrateCalculator = BitrateCalculator()
+    private var repository: VideoLogRepository?
 
     nonisolated static func == (lhs: StreamController, rhs: StreamController) -> Bool {
         lhs.id == rhs.id
@@ -18,6 +21,7 @@ final class StreamController: Identifiable, Hashable {
     nonisolated func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
+
     var activeSessionName: String?
     var connectionStatus: String = "Disconnected"
     var hardwareCPU: Double = 0.0
@@ -26,23 +30,37 @@ final class StreamController: Identifiable, Hashable {
     var selectedTimeframe: String = "1m"
     var currentSessionIdentifier: String?
     var currentSessionStartTime: Date?
+
     @ObservationIgnored nonisolated let videoFrameSubject = PassthroughSubject<CVPixelBuffer, Never>()
-    var videoPID: UInt16? = nil
-    var audioPID: UInt16? = nil
-    var videoResolution: CGSize? = nil
-    var videoColor: String? = nil
-    var videoGOPSize: Int? = nil
-    var videoFrameRate: Double? = nil
-    var audioSampleRate: Int? = nil
-    var audioChannels: Int? = nil
-    var audioCodec: String? = nil
-    var audioBitrate: Double? = nil
-    var audioLoudness: Double? = nil
-    var audioTruePeak: Double? = nil
-    var audioDialNorm: Int? = nil
+
+    var metadata = StreamMetadata()
+
+    // UI Proxy Properties for backward compatibility with Views
+    var videoPID: UInt16? { metadata.videoPID }
+    var audioPID: UInt16? { metadata.audioPID }
+    var videoResolution: CGSize? { metadata.videoResolution }
+    var videoColor: String? { metadata.videoColor }
+    var videoGOPSize: Int? { metadata.videoGOPSize }
+    var videoFrameRate: Double? { metadata.videoFrameRate }
+    var audioSampleRate: Int? { metadata.audioSampleRate }
+    var audioChannels: Int? { metadata.audioChannels }
+    var audioCodec: String? { metadata.audioCodec }
+    var audioBitrate: Double? { metadata.audioBitrate }
+    var audioLoudness: Double? { metadata.audioLoudness }
+    var audioTruePeak: Double? { metadata.audioTruePeak }
+    var audioDialNorm: Int? { metadata.audioDialNorm }
+
+    var tsID: UInt16? { metadata.tsID }
+    var programID: UInt16? { metadata.programID }
+    var servicesCount: Int { metadata.servicesCount }
+    var sdtChannel: String? { metadata.sdtChannel }
+    var sdtProvider: String? { metadata.sdtProvider }
+    var tsClock: String? { metadata.tsClock }
+    var pcrJitter: Double? { metadata.pcrJitter }
+    var pcrInterval: Double? { metadata.pcrInterval }
     
     var videoAspect: String? {
-        guard let res = videoResolution else { return nil }
+        guard let res = metadata.videoResolution else { return nil }
         let w = Int(res.width)
         let h = Int(res.height)
         if (w == 1920 && h == 1080) || (w == 1280 && h == 720) || (w == 3840 && h == 2160) { return "16:9" }
@@ -54,16 +72,6 @@ final class StreamController: Identifiable, Hashable {
     var streamPort: String = "-"
     var streamSourceType: String = "-"
     
-    var tsID: UInt16? = nil
-    var programID: UInt16? = nil
-    var servicesCount: Int = 0
-    var sdtChannel: String? = nil
-    var sdtProvider: String? = nil
-    
-    // PCR metrics
-    var tsClock: String? = nil
-    var pcrJitter: Double? = nil
-    var pcrInterval: Double? = nil
     var currentIAT: Double? = nil
     
     var streamDuration: TimeInterval = 0
@@ -81,7 +89,6 @@ final class StreamController: Identifiable, Hashable {
     
     var isAdvancedInspectorVisible: Bool = false
     var isVBR: Bool = false
-    private var bitrateHistory: [Double] = []
     private var lastPacketsValue: Int = 0
     private var lastCheckTime: Date? = nil
     
@@ -96,7 +103,13 @@ final class StreamController: Identifiable, Hashable {
     }
     
     // Injected SwiftData context for the background extraction engine to utilize
-    var modelContext: ModelContext?
+    var modelContext: ModelContext? {
+        didSet {
+            if let context = modelContext {
+                self.repository = VideoLogRepository(context: context)
+            }
+        }
+    }
     
     init() {
         self.liveStreamService = LiveStreamService(streamController: self)
@@ -104,90 +117,30 @@ final class StreamController: Identifiable, Hashable {
         Task {
             await SystemMonitor.shared.start()
             while true {
-                let stats = await SystemMonitor.shared.getAggregatedStats()
-                // Use local copy of selectedTimeframe to ensure thread safety
                 let currentFrame = self.selectedTimeframe
                 let sessionID = self.currentSessionIdentifier
                 let startTime = self.currentSessionStartTime
                 
-                // Fetch stats asynchronously outside MainActor
+                let stats = await self.hardwareMonitor.update(selectedTimeframe: currentFrame)
+
+                // Fetch progress asynchronously outside MainActor
                 let allProgress = await ExtractionProgress.shared.all()
                 let progress = sessionID.flatMap { allProgress[$0] }
-                
-                var avgCpu = 0.0, avgMem = 0.0, avgGpu = 0.0
-                if let windowStats = stats[currentFrame], !windowStats.isEmpty {
-                    avgCpu = windowStats.reduce(0.0) { $0 + $1.cpu } / Double(windowStats.count)
-                    avgMem = windowStats.reduce(0.0) { $0 + $1.memory } / Double(windowStats.count)
-                    avgGpu = windowStats.reduce(0.0) { $0 + $1.gpu } / Double(windowStats.count)
-                }
                 
                 let info = await self.liveStreamService.getStreamInfo()
                 
                 await MainActor.run {
-                    self.videoPID = info.videoPID
-                    self.audioPID = info.audioPID
-                    self.videoResolution = info.resolution
-                    self.audioSampleRate = info.audioSampleRate
-                    self.audioChannels = info.audioChannels
-                    self.audioCodec = info.audioCodec
-                    self.audioBitrate = info.audioBitrate
-                    self.audioLoudness = info.audioLoudness
-                    self.audioTruePeak = info.audioTruePeak
-                    self.audioDialNorm = info.audioDialNorm
-                    self.videoColor = info.videoColor
-                    self.videoGOPSize = info.videoGOPSize
-                    self.videoFrameRate = info.videoFrameRate
+                    self.updateMetadata(from: info)
                     
-                    self.tsID = info.tsID
-                    self.programID = info.programID
-                    self.servicesCount = info.servicesCount
-                    self.sdtChannel = info.sdtChannel
-                    self.sdtProvider = info.sdtProvider
-                    
-                    self.tsClock = info.tsClock
-                    self.pcrJitter = info.pcrJitter
-                    self.pcrInterval = info.pcrInterval
-                    
-                    self.hardwareCPU = avgCpu
-                    self.hardwareMemory = avgMem
-                    self.hardwareGPU = avgGpu
-                    self.hardwareStatsHistory = stats[currentFrame] ?? []
+                    self.hardwareCPU = stats.cpu
+                    self.hardwareMemory = stats.memory
+                    self.hardwareGPU = stats.gpu
+                    self.hardwareStatsHistory = stats.history
                     
                     if let start = startTime {
-                        if self.connectionStatus == "Active" {
-                            self.streamDuration = Date().timeIntervalSince(start)
-                        }
-                        if let prog = progress {
-                            let currentTotalPackets = prog.packets ?? 0
-                            let delta = currentTotalPackets - self.lastPacketsValue
-                            self.lastPacketsValue = currentTotalPackets
-                            self.streamPackets = currentTotalPackets
-                            self.streamFramesAnalyzed = prog.current
-                            
-                            let dur = max(self.streamDuration, 1.0)
-                            self.streamBitrate = Double(self.streamPackets) * 188.0 * 8.0 / dur / 1_000_000.0
-                            
-                            
-                            if self.streamDuration > 2.0 {
-                                let now = Date()
-                                let elapsed = self.lastCheckTime != nil ? now.timeIntervalSince(self.lastCheckTime!) : 2.0
-                                self.lastCheckTime = now
-                                
-                                if elapsed > 0.5 { // safeguard against tiny intervals
-                                    self.updateBitrateHistory(delta: delta, elapsed: elapsed)
-                                }
-                            }
-                        }
+                        self.updateSessionMetrics(start: start, progress: progress)
                     } else {
-                        self.streamDuration = 0
-                        self.streamPackets = 0
-                        self.streamFramesAnalyzed = 0
-                        self.streamBitrate = 0.0
-                        self.streamCCErrors = 0
-                        self.isVBR = false
-                        self.bitrateHistory.removeAll()
-                        self.lastPacketsValue = 0
-                        self.lastCheckTime = nil
+                        self.resetSessionMetrics()
                     }
                 }
                 
@@ -196,6 +149,71 @@ final class StreamController: Identifiable, Hashable {
         }
     }
     
+    private func updateMetadata(from info: (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?)) {
+        self.metadata.videoPID = info.videoPID
+        self.metadata.audioPID = info.audioPID
+        self.metadata.videoResolution = info.resolution
+        self.metadata.audioSampleRate = info.audioSampleRate
+        self.metadata.audioChannels = info.audioChannels
+        self.metadata.audioCodec = info.audioCodec
+        self.metadata.audioBitrate = info.audioBitrate
+        self.metadata.audioLoudness = info.audioLoudness
+        self.metadata.audioTruePeak = info.audioTruePeak
+        self.metadata.audioDialNorm = info.audioDialNorm
+        self.metadata.videoColor = info.videoColor
+        self.metadata.videoGOPSize = info.videoGOPSize
+        self.metadata.videoFrameRate = info.videoFrameRate
+
+        self.metadata.tsID = info.tsID
+        self.metadata.programID = info.programID
+        self.metadata.servicesCount = info.servicesCount
+        self.metadata.sdtChannel = info.sdtChannel
+        self.metadata.sdtProvider = info.sdtProvider
+
+        self.metadata.tsClock = info.tsClock
+        self.metadata.pcrJitter = info.pcrJitter
+        self.metadata.pcrInterval = info.pcrInterval
+    }
+
+    private func updateSessionMetrics(start: Date, progress: ExtractionProgress.ProgressInfo?) {
+        if self.connectionStatus == "Active" {
+            self.streamDuration = Date().timeIntervalSince(start)
+        }
+        if let prog = progress {
+            let currentTotalPackets = prog.packets ?? 0
+            let delta = currentTotalPackets - self.lastPacketsValue
+            self.lastPacketsValue = currentTotalPackets
+            self.streamPackets = currentTotalPackets
+            self.streamFramesAnalyzed = prog.current
+
+            let dur = max(self.streamDuration, 1.0)
+            self.streamBitrate = Double(self.streamPackets) * 188.0 * 8.0 / dur / 1_000_000.0
+
+            if self.streamDuration > 2.0 {
+                let now = Date()
+                let elapsed = self.lastCheckTime != nil ? now.timeIntervalSince(self.lastCheckTime!) : 2.0
+                self.lastCheckTime = now
+
+                if elapsed > 0.5 {
+                    let bitrateState = self.bitrateCalculator.update(delta: delta, elapsed: elapsed)
+                    self.isVBR = bitrateState.isVBR
+                }
+            }
+        }
+    }
+
+    private func resetSessionMetrics() {
+        self.streamDuration = 0
+        self.streamPackets = 0
+        self.streamFramesAnalyzed = 0
+        self.streamBitrate = 0.0
+        self.streamCCErrors = 0
+        self.isVBR = false
+        self.bitrateCalculator.reset()
+        self.lastPacketsValue = 0
+        self.lastCheckTime = nil
+    }
+
     @MainActor
     func startMonitoring(uri: String, context: ModelContext) async {
         self.modelContext = context
@@ -208,6 +226,15 @@ final class StreamController: Identifiable, Hashable {
         self.currentSessionIdentifier = sessionIdentifier
         self.currentSessionStartTime = Date()
         
+        self.parseURI(uri)
+
+        // Dispatch to the native actor to boot the hardware session
+        await self.liveStreamService.startMonitoring(uri: uri, sessionName: sessionIdentifier)
+        await self.liveStreamService.setMuted(self.isMuted)
+        self.connectionStatus = "Active"
+    }
+
+    private func parseURI(_ uri: String) {
         var cleanURI = uri.replacingOccurrences(of: "udp://", with: "")
         cleanURI = cleanURI.replacingOccurrences(of: "@", with: "")
         let parts = cleanURI.split(separator: ":")
@@ -219,11 +246,6 @@ final class StreamController: Identifiable, Hashable {
                 self.streamSourceType = "Multicast"
             }
         }
-        
-        // Dispatch to the native actor to boot the hardware session
-        await self.liveStreamService.startMonitoring(uri: uri, sessionName: sessionIdentifier)
-        await self.liveStreamService.setMuted(self.isMuted)
-        self.connectionStatus = "Active"
     }
     
     @MainActor
@@ -238,61 +260,13 @@ final class StreamController: Identifiable, Hashable {
         self.audioLevelsData = []
     }
     
-    internal func updateBitrateHistory(delta: Int, elapsed: TimeInterval) {
-        let instBitrate = Double(delta) * 188.0 * 8.0 / elapsed / 1_000_000.0
-        if instBitrate > 0.1 {
-            self.bitrateHistory.append(instBitrate)
-            if self.bitrateHistory.count > 10 {
-                self.bitrateHistory.removeFirst()
-            }
-            if self.bitrateHistory.count >= 5 {
-                let maxB = self.bitrateHistory.max() ?? 0
-                let minB = self.bitrateHistory.min() ?? 0
-                if maxB > 0 && ((maxB - minB) / maxB > 0.10) {
-                    self.isVBR = true
-                } else {
-                    self.isVBR = false
-                }
-            }
-        }
-    }
-    
     @MainActor
     func clearEvents() {
-        if let context = self.modelContext {
-            let descriptor = FetchDescriptor<VideoLog>(predicate: #Predicate { $0.isArchived == false })
-            if let activeLogs = try? context.fetch(descriptor) {
-                for log in activeLogs {
-                    log.isArchived = true
-                }
-                try? context.save()
-            }
-        }
+        self.repository?.archiveActiveLogs()
+
         self.currentSessionIdentifier = nil
         self.currentSessionStartTime = nil
-        self.videoPID = nil
-        self.audioPID = nil
-        self.videoResolution = nil
-        self.videoColor = nil
-        self.videoGOPSize = nil
-        self.videoFrameRate = nil
-        self.audioSampleRate = nil
-        self.audioChannels = nil
-        self.audioCodec = nil
-        self.audioBitrate = nil
-        self.audioLoudness = nil
-        self.audioTruePeak = nil
-        self.audioDialNorm = nil
-        
-        self.tsID = nil
-        self.programID = nil
-        self.servicesCount = 0
-        self.sdtChannel = nil
-        self.sdtProvider = nil
-        
-        self.tsClock = nil
-        self.pcrJitter = nil
-        self.pcrInterval = nil
+        self.metadata = StreamMetadata()
         self.currentIAT = nil
         
         self.streamIP = "-"
@@ -300,14 +274,8 @@ final class StreamController: Identifiable, Hashable {
         self.streamSourceType = "-"
         self.streamFramesAnalyzed = 0
         
-        self.isVBR = false
-        self.bitrateHistory.removeAll()
-        self.lastPacketsValue = 0
-        self.lastCheckTime = nil
-        self.streamCCErrors = 0
+        self.resetSessionMetrics()
     }
-    
-
     
     @MainActor
     func incrementCCErrors() {
@@ -328,8 +296,7 @@ final class StreamController: Identifiable, Hashable {
 
     @MainActor
     func insertVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?, issueSummary: String? = nil, iatMs: Double? = nil, boundingBoxes: String? = nil) {
-        guard let context = self.modelContext else { return }
-        let log = VideoLog(
+        self.repository?.insert(
             videoFilename: videoFilename,
             timestampSec: timestampSec,
             nodeSource: nodeSource,
@@ -339,13 +306,11 @@ final class StreamController: Identifiable, Hashable {
             issueScore: issueScore,
             analysisEngine: analysisEngine,
             thumbnailPath: thumbnailPath,
-            isArchived: false,
             sessionIdentifier: currentSessionIdentifier,
             sessionStartTime: currentSessionStartTime,
             issueSummary: issueSummary,
             iatMs: iatMs,
             boundingBoxes: boundingBoxes
         )
-        context.insert(log)
     }
 }
