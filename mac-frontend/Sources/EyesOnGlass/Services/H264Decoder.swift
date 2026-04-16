@@ -1,12 +1,8 @@
 import Foundation
 import VideoToolbox
 
-public protocol H264DecoderDelegate: AnyObject {
-    func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer, pts: Int64)
-}
-
-public class H264Decoder {
-    public weak var delegate: H264DecoderDelegate?
+public class H264Decoder: HardwareVideoDecoder {
+    public var decodedFrameCallback: ((CVPixelBuffer, Int64) -> Void)?
     
     private var formatDesc: CMVideoFormatDescription?
     private var decompressionSession: VTDecompressionSession?
@@ -55,7 +51,7 @@ public class H264Decoder {
     
     public init() {}
     
-    public func decode(nalUnit: Data, pts: Int64, dts: Int64?) {
+    public func decode(data nalUnit: Data, pts: Int64, dts: Int64?) {
         var startCodeLength = 0
         if nalUnit.count > 4, nalUnit[0] == 0, nalUnit[1] == 0, nalUnit[2] == 0, nalUnit[3] == 1 {
             startCodeLength = 4
@@ -383,6 +379,6 @@ public class H264Decoder {
         decoder.lastEmittedPTS = pts
         
         // print("H264Decoder: VT Callback emitted frame (PTS: \(pts))")
-        decoder.delegate?.decoder(decoder, didDecode: pixelBuffer, pts: pts)
+        decoder.decodedFrameCallback?(pixelBuffer, pts)
     }
 }

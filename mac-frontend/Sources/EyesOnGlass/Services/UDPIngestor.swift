@@ -12,7 +12,8 @@ public actor UDPIngestor {
     
     // Pipeline components
     private let demuxer = TSDemuxer()
-    private let videoDecoder = H264Decoder()
+    private var videoDecoder: HardwareVideoDecoder? = nil
+    private var currentVideoCodec: VideoCodec = .unknown
     private let audioDecoder = AudioDecoder()
     private let streamMonitor = StreamMonitor()
     
@@ -45,7 +46,7 @@ public actor UDPIngestor {
     private var audioLevels: [Float] = []
     
     public var streamInfo: (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
-        return (demuxer.currentVideoPID, demuxer.currentAudioPID, videoDecoder.videoSize, audioDecoder.sampleRate, audioDecoder.channels, audioDecoder.audioCodec, audioDecoder.audioBitrate, audioDecoder.loudness, audioDecoder.truePeak, audioDecoder.dialNorm, demuxer.currentTsID, demuxer.currentProgramID, demuxer.currentServicesCount, demuxer.currentSdtChannel, demuxer.currentSdtProvider, videoDecoder.videoColor, videoDecoder.gopSize, videoDecoder.frameRate, demuxer.currentTsClock, demuxer.currentPcrJitter, demuxer.currentPcrInterval)
+        return (demuxer.currentVideoPID, demuxer.currentAudioPID, videoDecoder?.videoSize, audioDecoder.sampleRate, audioDecoder.channels, audioDecoder.audioCodec, audioDecoder.audioBitrate, audioDecoder.loudness, audioDecoder.truePeak, audioDecoder.dialNorm, demuxer.currentTsID, demuxer.currentProgramID, demuxer.currentServicesCount, demuxer.currentSdtChannel, demuxer.currentSdtProvider, videoDecoder?.videoColor, videoDecoder?.gopSize, videoDecoder?.frameRate, demuxer.currentTsClock, demuxer.currentPcrJitter, demuxer.currentPcrInterval)
     }
     
     public var audioVisuals: (waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
@@ -93,7 +94,6 @@ public actor UDPIngestor {
         )
         self.bridge = newBridge
         
-        videoDecoder.delegate = newBridge
         audioDecoder.delegate = newBridge
         
         let (stream, continuation) = AsyncStream.makeStream(of: (Data, Double).self)
@@ -128,7 +128,8 @@ public actor UDPIngestor {
         processingTask?.cancel()
         
         demuxer.reset()
-        videoDecoder.reset()
+        videoDecoder?.reset()
+        currentVideoCodec = .unknown
         packetCount = 0
     }
     
@@ -391,19 +392,32 @@ public actor UDPIngestor {
         let events = demuxer.process(data: data)
         for event in events {
             switch event {
-            case .nalUnit(let nal, let pts, let dts):
+            case .videoFrame(let codec, let data, let pts, let dts):
                 lastVideoTime = Date().timeIntervalSince1970
                 if isVideoLost {
                     isVideoLost = false
                     onVideoRestoredCallback?()
                 }
-                videoDecoder.decode(nalUnit: nal, pts: pts, dts: dts)
+                if codec != .unknown && codec != currentVideoCodec {
+                    currentVideoCodec = codec
+                    if codec == .h264 {
+                        videoDecoder = H264Decoder()
+                    } else if codec == .mpeg2 {
+                        videoDecoder = MPEG2Decoder()
+                    }
+                    if let bridge = self.bridge {
+                        videoDecoder?.decodedFrameCallback = { [weak bridge] frame, framePts in
+                            bridge?.handleDecodedFrame(frame, pts: framePts)
+                        }
+                    }
+                }
+                videoDecoder?.decode(data: data, pts: pts, dts: dts)
             case .audio(let audio, let pts):
                 audioDecoder.decode(audioPayload: audio, pts: pts)
             case .discontinuity:
-                print("UDPIngestor: Stream discontinuity detected. Allowing H264Decoder to adapt.")
+                print("UDPIngestor: Stream discontinuity detected. Allowing HardwareVideoDecoder to adapt.")
                 self.onCCErrorCallback?()
-                // We intentionally DO NOT reset the H264Decoder here.
+                // We intentionally DO NOT reset the videoDecoder here.
                 // VTDecompressionSession can survive minor drops, and resetting requires an IDR frame 
                 // which might not arrive for 30s, causing us to drop thousands of P-frames.
             }
@@ -472,7 +486,7 @@ public actor UDPIngestor {
     }
 }
 
-fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
+fileprivate class IngestorBridge: AudioDecoderDelegate {
     weak var actor: UDPIngestor?
     let monitor: StreamMonitor
     let onVideoFrame: ((CVPixelBuffer) -> Void)?
@@ -485,7 +499,7 @@ fileprivate class IngestorBridge: H264DecoderDelegate, AudioDecoderDelegate {
         self.onAudioVisuals = onAudioVisuals
     }
     
-    func decoder(_ decoder: H264Decoder, didDecode frame: CVPixelBuffer, pts: Int64) {
+    func handleDecodedFrame(_ frame: CVPixelBuffer, pts: Int64) {
         onVideoFrame?(frame)
         Task(priority: .userInitiated) {
             let video = VideoHealth(frame: frame)

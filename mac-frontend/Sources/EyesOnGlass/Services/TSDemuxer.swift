@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TSDemuxerEvent {
-    case nalUnit(Data, pts: Int64, dts: Int64?)
+    case videoFrame(codec: VideoCodec, data: Data, pts: Int64, dts: Int64?)
     case audio(Data, pts: Int64)
     case discontinuity
 }
@@ -19,6 +19,9 @@ public class TSDemuxer {
     private var isGatheringAudioPES = false
     private var videoStreamBuffer = Data()
     private var audioStreamBuffer = Data()
+    
+    private var pmtPID: UInt16? = nil
+    private var videoCodec: VideoCodec = .unknown
     
     private var videoContinuityCounter: UInt8?
     private var audioContinuityCounter: UInt8?
@@ -159,6 +162,8 @@ public class TSDemuxer {
         if pusi {
             if pid == 0x0000 {
                 parsePAT(payload: payload, pusi: pusi)
+            } else if pid == pmtPID {
+                parsePMT(payload: payload, pusi: pusi)
             } else if pid == 0x0011 {
                 parseSDT(payload: payload, pusi: pusi)
             }
@@ -206,7 +211,7 @@ public class TSDemuxer {
                          if start < payload.count {
                              let boundary = videoStreamBuffer.endIndex
                              videoStreamBuffer.append(payload.suffix(from: start))
-                             extractNALUnits(boundary: boundary, oldPts: oldVideoPTS, oldDts: oldVideoDTS)
+                             extractVideoSyntaxUnits(boundary: boundary, oldPts: oldVideoPTS, oldDts: oldVideoDTS)
                              isGatheringVideoPES = true
                          } else if start == payload.count {
                              isGatheringVideoPES = true
@@ -237,7 +242,7 @@ public class TSDemuxer {
             if isGatheringVideoPES && lockedVideoPID == pid {
                 let boundary = videoStreamBuffer.endIndex
                 videoStreamBuffer.append(payload)
-                extractNALUnits(boundary: boundary, oldPts: currentVideoPTS, oldDts: currentVideoDTS)
+                extractVideoSyntaxUnits(boundary: boundary, oldPts: currentVideoPTS, oldDts: currentVideoDTS)
             } else if isGatheringAudioPES && lockedAudioPID == pid {
                 audioStreamBuffer.append(payload)
             }
@@ -311,7 +316,7 @@ public class TSDemuxer {
         return nil
     }
     
-    private func extractNALUnits(boundary: Int, oldPts: Int64, oldDts: Int64?) {
+    private func extractVideoSyntaxUnits(boundary: Int, oldPts: Int64, oldDts: Int64?) {
         var startOffset = videoStreamBuffer.startIndex
         
         while startOffset < videoStreamBuffer.endIndex - 3 {
@@ -350,7 +355,7 @@ public class TSDemuxer {
             let dtsToUse = nalStart < boundary ? oldDts : currentVideoDTS
             
             let nalUnit = videoStreamBuffer[nalStart..<nextNalStart]
-            currentEvents.append(.nalUnit(Data(nalUnit), pts: ptsToUse, dts: dtsToUse))
+            currentEvents.append(.videoFrame(codec: videoCodec, data: Data(nalUnit), pts: ptsToUse, dts: dtsToUse))
             
             startOffset = nextNalStart
         }
@@ -389,10 +394,55 @@ public class TSDemuxer {
                         let pn = (UInt16(payload[i]) << 8) | UInt16(payload[i+1])
                         if pn != 0x0000 {
                             programID = pn
+                            pmtPID = ((UInt16(payload[i+2]) & 0x1F) << 8) | UInt16(payload[i+3])
                             break
                         }
                     }
                 }
+            }
+        }
+    }
+    
+    private func parsePMT(payload: Data, pusi: Bool) {
+        guard pusi, payload.count > 1 else { return }
+        let pointer = Int(payload[0])
+        let offset = 1 + pointer
+        guard offset + 12 < payload.count else { return }
+        
+        let tableID = payload[offset]
+        if tableID == 0x02 { // PMT
+            let sectionLength = Int((UInt16(payload[offset+1] & 0x0F) << 8) | UInt16(payload[offset+2]))
+            guard offset + 3 + sectionLength <= payload.count else { return }
+            
+            let programInfoLength = Int((UInt16(payload[offset+10] & 0x0F) << 8) | UInt16(payload[offset+11]))
+            var currentOffset = offset + 12 + programInfoLength
+            let endOffset = offset + 3 + sectionLength - 4 // before CRC32
+            
+            while currentOffset + 4 <= endOffset {
+                let streamType = payload[currentOffset]
+                let elementaryPID = (UInt16(payload[currentOffset+1] & 0x1F) << 8) | UInt16(payload[currentOffset+2])
+                let esInfoLength = Int((UInt16(payload[currentOffset+3] & 0x0F) << 8) | UInt16(payload[currentOffset+4]))
+                
+                if streamType == 0x1B || streamType == 0x24 { 
+                    if videoCodec == .unknown { self.videoCodec = .h264 } 
+                    if lockedVideoPID == nil { 
+                        lockedVideoPID = elementaryPID 
+                        print("TSDemuxer (PMT): Locked onto Video PID 0x\(String(elementaryPID, radix: 16)) as H264/HEVC")
+                    }
+                } else if streamType == 0x02 {
+                    if videoCodec == .unknown { self.videoCodec = .mpeg2 }
+                    if lockedVideoPID == nil { 
+                        lockedVideoPID = elementaryPID 
+                        print("TSDemuxer (PMT): Locked onto Video PID 0x\(String(elementaryPID, radix: 16)) as MPEG-2")
+                    }
+                } else if [0x81, 0x0F, 0x03, 0x04].contains(streamType) {
+                    if lockedAudioPID == nil { 
+                        lockedAudioPID = elementaryPID 
+                        print("TSDemuxer (PMT): Locked onto Audio PID 0x\(String(elementaryPID, radix: 16))")
+                    }
+                }
+                
+                currentOffset += 5 + esInfoLength
             }
         }
     }
@@ -460,6 +510,8 @@ public class TSDemuxer {
         audioContinuityCounter = nil
         lockedVideoPID = nil
         lockedAudioPID = nil
+        pmtPID = nil
+        videoCodec = .unknown
         currentVideoPTS = 0
         currentVideoDTS = nil
         currentAudioPTS = 0
