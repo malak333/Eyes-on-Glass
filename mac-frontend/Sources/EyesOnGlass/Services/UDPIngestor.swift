@@ -130,6 +130,9 @@ public actor UDPIngestor {
         
         demuxer.reset()
         videoDecoder?.reset()
+        Task { [weak self] in
+            await self?.streamMonitor.reset()
+        }
         currentVideoCodec = .unknown
         packetCount = 0
     }

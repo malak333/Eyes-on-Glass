@@ -103,12 +103,7 @@ public class MPEG2Decoder: HardwareVideoDecoder {
             }
         }
         
-        // P/B frames do not naturally carry the sequence metadata
-        if !foundSequenceHeader, let header = lastSequenceHeader {
-            var prependedData = header
-            prependedData.append(data)
-            data = prependedData
-        }
+
         
         // Look for Sequence Header to construct Format Description if not active
         if !sessionActive || formatDesc == nil {

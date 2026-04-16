@@ -159,7 +159,22 @@ public final class NativeVLMClient {
         self.state = .loadingToMemory
         
         do {
-            guard let modelDir = Bundle.module.url(forResource: "GemmaModel", withExtension: nil) else {
+            let bundleName = "EyesOnGlass_EyesOnGlass"
+            let candidates = [
+                Bundle.main.resourceURL?.appendingPathComponent("\(bundleName).bundle"),
+                Bundle.main.bundleURL.appendingPathComponent("\(bundleName).bundle")
+            ]
+            
+            var moduleBundle: Bundle? = nil
+            for candidate in candidates {
+                if let url = candidate, let bundle = Bundle(url: url) {
+                    moduleBundle = bundle
+                    break
+                }
+            }
+            
+            let resolvedBundle = moduleBundle ?? Bundle.main
+            guard let modelDir = resolvedBundle.url(forResource: "GemmaModel", withExtension: nil) else {
                 self.state = .error("Model files not found in app bundle. Was the build script run?")
                 return
             }

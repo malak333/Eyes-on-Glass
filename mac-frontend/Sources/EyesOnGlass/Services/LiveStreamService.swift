@@ -77,6 +77,28 @@ actor LiveStreamService {
     private var audioLossStartTime: TimeInterval? = nil
     private var wasAudioHealthy: Bool? = nil
 
+    final class DropFrameState: @unchecked Sendable {
+        private let lock = NSLock()
+        var isBusy = false
+        
+        func tryAcquire() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if isBusy { return false }
+            isBusy = true
+            return true
+        }
+        
+        func release() {
+            lock.lock()
+            isBusy = false
+            lock.unlock()
+        }
+    }
+
+    // Frame Dropout Backpressure State
+    private let processingState = DropFrameState()
+
     func incrementPendingCCErrors() {
         pendingCCErrorsCount += 1
     }
@@ -176,9 +198,17 @@ actor LiveStreamService {
         self.ingestor = newIngestor
         
         Task(priority: .userInitiated) {
-            await newIngestor.start(uri: uri, onFrame: { pixelBuffer, audioHealth, networkIAT in
+            await newIngestor.start(uri: uri, onFrame: { [weak self] pixelBuffer, audioHealth, networkIAT in
+                guard let self = self else { return }
+                
+                if !self.processingState.tryAcquire() {
+                    appLogger.warning("LiveStreamService: Dropped frame due to Vision backlog backpressure.")
+                    return
+                }
+                
                 Task(priority: .userInitiated) {
                     await self.processFrame(pixelBuffer: pixelBuffer, audioHealth: audioHealth, networkIAT: networkIAT, sessionName: sessionName, thumbnailsDir: thumbnailsDir)
+                    self.processingState.release()
                 }
             }, onVideoFrame: { pixelBuffer in
                 self.visualsRenderer.render(pixelBuffer: pixelBuffer)

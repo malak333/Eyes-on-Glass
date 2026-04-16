@@ -47,3 +47,5 @@ mac-frontend/Sources/EyesOnGlass/GemmaModel/
 
 # Analysis Results
 analysis_results/
+mac-frontend/EyesOnGlass.app/
+mac-frontend/EyesOnGlass.app/Contents/MacOS/EyesOnGlass

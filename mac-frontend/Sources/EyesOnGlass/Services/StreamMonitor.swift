@@ -20,6 +20,14 @@ public actor StreamMonitor {
     
     public init() {}
     
+    public func reset() {
+        videoBuffer.removeAll()
+        audioBuffer.removeAll()
+        highestPTS = 0
+        lastProcessedPTS = nil
+        skipCount = 0
+    }
+    
     public func setOnSynced(_ callback: @escaping (CVPixelBuffer, AudioHealth) -> Void) {
         self.onSyncedCallback = callback
     }
