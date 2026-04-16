@@ -45,8 +45,9 @@ public actor UDPIngestor {
     private var audioPhase: [Float] = []
     private var audioLevels: [Float] = []
     
-    public var streamInfo: (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
-        return (demuxer.currentVideoPID, demuxer.currentAudioPID, videoDecoder?.videoSize, audioDecoder.sampleRate, audioDecoder.channels, audioDecoder.audioCodec, audioDecoder.audioBitrate, audioDecoder.loudness, audioDecoder.truePeak, audioDecoder.dialNorm, demuxer.currentTsID, demuxer.currentProgramID, demuxer.currentServicesCount, demuxer.currentSdtChannel, demuxer.currentSdtProvider, videoDecoder?.videoColor, videoDecoder?.gopSize, videoDecoder?.frameRate, demuxer.currentTsClock, demuxer.currentPcrJitter, demuxer.currentPcrInterval)
+    public var streamInfo: (videoPID: UInt16?, audioPID: UInt16?, videoCodec: String?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
+        let vc = currentVideoCodec == .unknown ? nil : currentVideoCodec.rawValue.uppercased()
+        return (demuxer.currentVideoPID, demuxer.currentAudioPID, vc, videoDecoder?.videoSize, audioDecoder.sampleRate, audioDecoder.channels, audioDecoder.audioCodec, audioDecoder.audioBitrate, audioDecoder.loudness, audioDecoder.truePeak, audioDecoder.dialNorm, demuxer.currentTsID, demuxer.currentProgramID, demuxer.currentServicesCount, demuxer.currentSdtChannel, demuxer.currentSdtProvider, videoDecoder?.videoColor, videoDecoder?.gopSize, videoDecoder?.frameRate, demuxer.currentTsClock, demuxer.currentPcrJitter, demuxer.currentPcrInterval)
     }
     
     public var audioVisuals: (waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float]) {
@@ -381,8 +382,9 @@ public actor UDPIngestor {
         }
         
         self.lastPacketTime = Date().timeIntervalSince1970
+        let beforeCount = self.packetCount
         self.packetCount += data.count / 188
-        if packetCount % 50 == 0 {
+        if (beforeCount / 50) < (self.packetCount / 50) {
             onPacketCallback?(packetCount)
         }
         if isStreamLost {

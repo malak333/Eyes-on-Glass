@@ -148,6 +148,43 @@ final class StreamControllerTests: XCTestCase {
         }
     }
     
+    func testEnqueueVideoLogUnblocksIngestor() async throws {
+        let context = await MainActor.run { modelContainer.mainContext }
+        await MainActor.run {
+            controller.modelContext = context
+        }
+        
+        // This is nonisolated and executed synchronously (testing fire-and-forget behaviour)
+        controller.enqueueVideoLog(
+            videoFilename: "udp://TEST-STREAM-ENQUEUE",
+            timestampSec: 101.5,
+            nodeSource: "Live-Multicast",
+            nodeBackbone: "East",
+            nodeDest: "Distribution",
+            issueType: "async_test",
+            issueScore: 1.0,
+            analysisEngine: "ingestor",
+            thumbnailPath: nil,
+            iatMs: 45.2
+        )
+        
+        // Wait for the detached Task { @MainActor in } to execute
+        try await Task.sleep(nanoseconds: 100_000_000)
+        
+        let descriptor = FetchDescriptor<VideoLog>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        let results = try await MainActor.run { try context.fetch(descriptor) }
+        
+        XCTAssertTrue(results.contains(where: { $0.videoFilename == "udp://TEST-STREAM-ENQUEUE" }), "The nonisolated enqueue method failed to insert the log onto the MainActor.")
+    }
+    
+    @MainActor
+    func testFlushToDisk() async throws {
+        let context = modelContainer.mainContext
+        controller.modelContext = context
+        
+        XCTAssertNoThrow(controller.flushToDisk(), "Calling the flush boundary should not throw any Context Save errors.")
+    }
+    
     @MainActor
     func testInsertVideoLogWithIAT() async throws {
         let context = modelContainer.mainContext
@@ -236,7 +273,7 @@ final class StreamControllerTests: XCTestCase {
         XCTAssertNil(controller.audioPID)
         XCTAssertEqual(controller.streamFramesAnalyzed, 0)
         XCTAssertEqual(controller.streamCCErrors, 0)
-        XCTAssertEqual(controller.totalCCErrors, 0)
+        XCTAssertEqual(controller.totalCCErrors, 5)
         XCTAssertEqual(controller.streamIP, "-")
     }
     

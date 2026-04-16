@@ -81,6 +81,12 @@ actor LiveStreamService {
         pendingCCErrorsCount += 1
     }
     
+    func popPendingCCErrors() -> Int {
+        let count = pendingCCErrorsCount
+        pendingCCErrorsCount = 0
+        return count
+    }
+    
     func recordIssueState() {
         lastIssueEncounteredTime = Date().timeIntervalSince1970
         isPendingRecovery = true
@@ -125,11 +131,11 @@ actor LiveStreamService {
         return url.path
     }
     
-    func getStreamInfo() async -> (videoPID: UInt16?, audioPID: UInt16?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
+    func getStreamInfo() async -> (videoPID: UInt16?, audioPID: UInt16?, videoCodec: String?, resolution: CGSize?, audioSampleRate: Int?, audioChannels: Int?, audioCodec: String?, audioBitrate: Double?, audioLoudness: Double?, audioTruePeak: Double?, audioDialNorm: Int?, tsID: UInt16?, programID: UInt16?, servicesCount: Int, sdtChannel: String?, sdtProvider: String?, videoColor: String?, videoGOPSize: Int?, videoFrameRate: Double?, tsClock: String?, pcrJitter: Double?, pcrInterval: Double?) {
         if let ingestor = ingestor {
             return await ingestor.streamInfo
         }
-        return (nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil, nil)
+        return (nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, 0, nil, nil, nil, nil, nil, nil, nil, nil)
     }
     
     func getAudioVisuals() async -> (waveform: [Float], vectorscope: [CGPoint], phase: [Float], levels: [Float])? {
@@ -184,17 +190,13 @@ actor LiveStreamService {
                 }
             }, onCCError: {
                 Task(priority: .utility) {
-                    self.incrementPendingCCErrors()
-                    let localController = self.streamController
-                    await MainActor.run {
-                        localController?.incrementCCErrors()
-                    }
+                    await self.incrementPendingCCErrors()
                 }
             }, onStreamLost: {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await self.streamController?.insertVideoLog(
+                    self.streamController?.enqueueVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -210,7 +212,7 @@ actor LiveStreamService {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await self.streamController?.insertVideoLog(
+                    self.streamController?.enqueueVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -226,7 +228,7 @@ actor LiveStreamService {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await self.streamController?.insertVideoLog(
+                    self.streamController?.enqueueVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -242,7 +244,7 @@ actor LiveStreamService {
                 Task(priority: .utility) {
                     self.recordIssueState()
                     let ts = Double(self.frameCount)
-                    await self.streamController?.insertVideoLog(
+                    self.streamController?.enqueueVideoLog(
                         videoFilename: sessionName,
                         timestampSec: ts,
                         nodeSource: "Live-Multicast",
@@ -299,7 +301,7 @@ actor LiveStreamService {
             if let previous = wasAudioHealthy {
                 if !previous {
                     recordIssueState()
-                    await self.streamController?.insertVideoLog(
+                    self.streamController?.enqueueVideoLog(
                         videoFilename: sessionName,
                         timestampSec: Double(currentFrameIndex),
                         nodeSource: "Live-Multicast",
@@ -325,7 +327,7 @@ actor LiveStreamService {
                 if let previous = wasAudioHealthy {
                     if previous {
                         recordIssueState()
-                        await self.streamController?.insertVideoLog(
+                        self.streamController?.enqueueVideoLog(
                             videoFilename: sessionName,
                             timestampSec: Double(currentFrameIndex),
                             nodeSource: "Live-Multicast",
@@ -409,7 +411,7 @@ actor LiveStreamService {
                                 let (isFailure, reason) = await NativeVLMClient.shared.analyzeBlackScreenTransition(preFrame: prePath, blackFrame: repPath, endFrame: endPath, tier: tier)
                                 if isFailure {
                                     appLogger.info("Black screen transition deemed FAILURE by VLM. Logging issue.")
-                                    await self.streamController?.insertVideoLog(
+                                    self.streamController?.enqueueVideoLog(
                                         videoFilename: sessionBackup,
                                         timestampSec: Double(indexBackup),
                                         nodeSource: "Live-Multicast",
@@ -500,11 +502,13 @@ actor LiveStreamService {
                         startOfIncidentPath = savedThumbPath
                         peakMacroblockingScore = Double(macroConfidence)
                         peakMacroblockingFramePath = savedThumbPath
+                        retainFileOnDisk = true
                     } else {
                         consecutiveMBCount += 1
                         if let currentPath = savedThumbPath, Double(macroConfidence) > peakMacroblockingScore {
                             peakMacroblockingScore = Double(macroConfidence)
                             peakMacroblockingFramePath = currentPath
+                            retainFileOnDisk = true
                         }
                     }
                     
@@ -515,6 +519,11 @@ actor LiveStreamService {
                         try? logVLMTrigger.data(using: .utf8)?.write(to: URL(fileURLWithPath: "/tmp/mb_log.txt"), options: .atomic) // Or rather append. Wait, safely append!
                         if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMTrigger.data(using: .utf8)!); try? fh.close() }
                         
+                        let sessionBackup = sessionName
+                        let indexBackup = currentFrameIndex
+                        let iatMsBackup = iatMs
+                        let boxesBackup = boundingBoxesJSON
+                        let peakScoreBackup = peakMacroblockingScore
                         let tier = await MainActor.run { NativeVLMClient.shared.selectedTier }
                         let isVlmReady = await MainActor.run { 
                             if case .ready = NativeVLMClient.shared.state { return true }
@@ -525,22 +534,16 @@ actor LiveStreamService {
                         if isVlmReady {
                             if let priorPath = getPreviousFrameHEIC(thumbnailsDir: thumbnailsDir), let peakPath = peakMacroblockingFramePath {
                                 isStageAVerifying = true
-                                let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: peakPath, tier: tier)
-                                isStageAVerifying = false
-                                
-                                if isVerified {
-                                    isCurrentMBSeriesVerified = true
-                                    currentMBVerifiedEngine = tier.displayName
-                                    issuesFound.append(("macroblocking", peakMacroblockingScore, tier.displayName, nil, boundingBoxesJSON))
-                                    let logVLMStatus = "LiveStreamService: VLM APPROVED Incident\\n"
-                                    if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
-                                } else {
-                                    consecutiveMBCount = 0
-                                    startOfIncidentPath = nil
-                                    peakMacroblockingFramePath = nil
-                                    appLogger.info("LLM rejected live macroblocking detection. Incident dropped.")
-                                    let logVLMStatus = "LiveStreamService: VLM REJECTED Incident\\n"
-                                    if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
+                                Task(priority: .utility) {
+                                    let isVerified = await NativeVLMClient.shared.analyzeStageA(lastGood: priorPath, bad: peakPath, tier: tier)
+                                    await self.handleStageAResult(isVerified: isVerified,
+                                                                  tierName: tier.displayName,
+                                                                  peakPath: peakPath,
+                                                                  peakScore: peakScoreBackup,
+                                                                  boxes: boxesBackup,
+                                                                  session: sessionBackup,
+                                                                  index: indexBackup,
+                                                                  iatMs: iatMsBackup)
                                 }
                             }
                         } else {
@@ -548,7 +551,7 @@ actor LiveStreamService {
                             isCurrentMBSeriesVerified = true
                             currentMBVerifiedEngine = "offline"
                             issuesFound.append(("macroblocking", peakMacroblockingScore, "offline", nil, boundingBoxesJSON))
-                            let logVLMStatus = "LiveStreamService: VLM Offline, auto-approved\\n"
+                            let logVLMStatus = "LiveStreamService: VLM Offline, auto-approved\n"
                             if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
                         }
 
@@ -571,7 +574,7 @@ actor LiveStreamService {
                     Task(priority: .utility) {
                         if let summary = await NativeVLMClient.shared.analyzeStageB(start: start, peak: peak, end: endPath, tier: tier) {
                             appLogger.info("Stage B incident report generated: \(summary)")
-                            await self.streamController?.insertVideoLog(
+                            self.streamController?.enqueueVideoLog(
                                 videoFilename: sessionBackup,
                                 timestampSec: Double(indexBackup),
                                 nodeSource: "VLM-Forensic",
@@ -611,7 +614,7 @@ actor LiveStreamService {
                     }
                     
                     if shouldLogOk {
-                        await self.streamController?.insertVideoLog(
+                        self.streamController?.enqueueVideoLog(
                             videoFilename: sessionName,
                             timestampSec: Double(currentFrameIndex),
                             nodeSource: "Live-Multicast",
@@ -631,7 +634,7 @@ actor LiveStreamService {
                 retainFileOnDisk = true
                 
                 for (issue, score, engine, summary, boxes) in issuesFound {
-                    await self.streamController?.insertVideoLog(
+                    self.streamController?.enqueueVideoLog(
                         videoFilename: sessionName,
                         timestampSec: Double(currentFrameIndex),
                         nodeSource: "Live-Multicast",
@@ -657,6 +660,38 @@ actor LiveStreamService {
     }
     
     // Removed updateVideoView and updateAudioView methods
+    
+    private func handleStageAResult(isVerified: Bool, tierName: String, peakPath: String, peakScore: Double, boxes: String?, session: String, index: Int, iatMs: Double) async {
+        self.isStageAVerifying = false
+        if isVerified {
+            self.isCurrentMBSeriesVerified = true
+            self.currentMBVerifiedEngine = tierName
+            let logVLMStatus = "LiveStreamService: VLM APPROVED Incident\n"
+            if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
+            
+            self.streamController?.enqueueVideoLog(
+                videoFilename: session,
+                timestampSec: Double(index),
+                nodeSource: "Live-Multicast",
+                nodeBackbone: "East-Backbone-Live",
+                nodeDest: "Distribution-Node",
+                issueType: "macroblocking",
+                issueScore: peakScore,
+                analysisEngine: tierName,
+                thumbnailPath: URL(fileURLWithPath: peakPath).lastPathComponent,
+                issueSummary: nil,
+                iatMs: iatMs,
+                boundingBoxes: boxes
+            )
+        } else {
+            self.consecutiveMBCount = 0
+            self.startOfIncidentPath = nil
+            self.peakMacroblockingFramePath = nil
+            appLogger.info("LLM rejected live macroblocking detection. Incident dropped.")
+            let logVLMStatus = "LiveStreamService: VLM REJECTED Incident\n"
+            if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/mb_log.txt")) { fh.seekToEndOfFile(); fh.write(logVLMStatus.data(using: .utf8)!); try? fh.close() }
+        }
+    }
     
     static func determineDefaultEngine(isVlmReady: Bool, frameIndex: Int, tierName: String) -> String {
         return (isVlmReady && frameIndex % 5 == 0) ? tierName : "opencv"

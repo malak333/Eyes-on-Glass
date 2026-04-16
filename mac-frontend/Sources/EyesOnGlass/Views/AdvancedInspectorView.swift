@@ -30,7 +30,7 @@ struct AdvancedInspectorView: View {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 12) {
                         InfoGroup(title: "Video Info", items: [
-                            ("CODEC", "H.264"),
+                            ("CODEC", streamController.videoCodec ?? "-"),
                             ("PID", streamController.videoPID != nil ? String(streamController.videoPID!) : "-"),
                             ("Aspect", streamController.videoAspect ?? "-"),
                             ("AFD", "Not Present"), // SEI parsed AFD is not currently extracted

@@ -28,6 +28,7 @@ public class MPEG2Decoder: HardwareVideoDecoder {
     private var currentFrameDTS: Int64? = nil
     
     private var currentFrameHasSlices = false
+    private var lastSequenceHeader: Data?
     
     public init() {}
     
@@ -70,9 +71,44 @@ public class MPEG2Decoder: HardwareVideoDecoder {
     }
     
     private func decodeAccumulatedFrame() {
-        let data = currentFrameData
+        var data = currentFrameData
         let pts = currentFramePTS
         let dts = currentFrameDTS
+        
+        var foundSequenceHeader = false
+        let scanLimit = min(data.count - 3, 2048)
+        var sequenceHeaderEndIndex: Int? = nil
+        
+        if scanLimit > 0 {
+            for i in 0..<scanLimit {
+                if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 && data[i+3] == 0xB3 {
+                    foundSequenceHeader = true
+                    // Extract Sequence Header and any extensions before GOP (0xB8) or Picture (0x00)
+                    for j in (i+4)..<(data.count-3) {
+                        if data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x01 {
+                            let nextCode = data[j+3]
+                            if nextCode == 0x00 || nextCode == 0xB8 { // Picture Header or GOP Header
+                                sequenceHeaderEndIndex = j
+                                break
+                            }
+                        }
+                    }
+                    if let endIndex = sequenceHeaderEndIndex {
+                        self.lastSequenceHeader = data.subdata(in: i..<endIndex)
+                    } else {
+                        self.lastSequenceHeader = data.subdata(in: i..<data.count)
+                    }
+                    break
+                }
+            }
+        }
+        
+        // P/B frames do not naturally carry the sequence metadata
+        if !foundSequenceHeader, let header = lastSequenceHeader {
+            var prependedData = header
+            prependedData.append(data)
+            data = prependedData
+        }
         
         // Look for Sequence Header to construct Format Description if not active
         if !sessionActive || formatDesc == nil {
@@ -89,6 +125,12 @@ public class MPEG2Decoder: HardwareVideoDecoder {
                 // Cant decode until we see a sequence header to get dimensions
                 return
             }
+        }
+        
+        // Ensure the payload actually contains visual slice data.
+        // Standalone sequence headers (metadata only) will crash VideoToolbox with -12909.
+        if !currentFrameHasSlices {
+            return
         }
         
         submitToDecoder(data: data, pts: pts, dts: dts)
@@ -242,6 +284,7 @@ public class MPEG2Decoder: HardwareVideoDecoder {
         }
         
         var infoFlagsOut: VTDecodeInfoFlags = []
+        
         let decodeStatus = VTDecompressionSessionDecodeFrame(
             session,
             sampleBuffer: validSampleBuffer,
@@ -251,10 +294,6 @@ public class MPEG2Decoder: HardwareVideoDecoder {
             if status == noErr, let pixelBuffer = imageBuffer {
                 self?.decodedFrameCallback?(pixelBuffer, presentationTimeStamp.value)
             }
-        }
-        
-        if decodeStatus != noErr {
-            // print("MPEG2Decoder: Frame decoding failed with status \(decodeStatus)")
         }
     }
     
@@ -271,6 +310,7 @@ public class MPEG2Decoder: HardwareVideoDecoder {
         currentFrameHasSlices = false
         currentFramePTS = -1
         currentFrameDTS = nil
+        lastSequenceHeader = nil
     }
 }
 

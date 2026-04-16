@@ -183,18 +183,48 @@ final class UDPIngestorTests: XCTestCase {
         XCTAssertEqual(initialIAT, 0.0, "Initial IAT should be 0.0")
         
         // Inject first packet (sets baseline)
-        await ingestor._injectDataForTest(Data(), packetIat: 0.0)
+        await ingestor._injectDataForTest(Data(repeating: 0, count: 188), packetIat: 0.0)
         
         // Wait 50ms
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         // Inject second packet with simulated 55ms IAT
-        await ingestor._injectDataForTest(Data(), packetIat: 55.0)
+        await ingestor._injectDataForTest(Data(repeating: 0, count: 188), packetIat: 55.0)
         
         let capturedIAT = await ingestor.captureAndResetIAT()
         XCTAssertGreaterThan(capturedIAT, 50.0, "IAT should capture the >50ms injected delay")
         
         let resetIAT = await ingestor.captureAndResetIAT()
         XCTAssertEqual(resetIAT, 0.0, "IAT should reset to 0.0 after capture")
+    }
+
+    func testDeltaPacketThresholding() async {
+        let ingestor = UDPIngestor()
+        
+        let expectation = XCTestExpectation(description: "onPacket callback triggers on exactly the 50th boundary")
+        expectation.expectedFulfillmentCount = 2
+        
+        var reportedCounts = [Int]()
+        await ingestor.start(
+            uri: "udp://127.0.0.1:9999",
+            onFrame: { _, _, _ in },
+            onVideoFrame: { _ in },
+            onAudioVisuals: { _, _, _, _ in },
+            onPacket: { count in
+                reportedCounts.append(count)
+                expectation.fulfill()
+            }
+        )
+        
+        for _ in 1...100 {
+            await ingestor._injectDataForTest(Data(repeating: 0, count: 188), packetIat: 0.0)
+        }
+        
+        await fulfillment(of: [expectation], timeout: 2.0)
+        XCTAssertTrue(reportedCounts.contains(50), "Should report exactly when reaching 50")
+        XCTAssertTrue(reportedCounts.contains(100), "Should report exactly when reaching 100")
+        XCTAssertEqual(reportedCounts.count, 2, "Should only report precisely twice over a 100-packet sweep")
+        
+        await ingestor.stop()
     }
 }

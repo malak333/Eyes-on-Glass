@@ -8,6 +8,10 @@ struct DashboardView: View {
     @Query(filter: #Predicate<VideoLog> { $0.isArchived == false }, sort: \VideoLog.timestampSec, order: .reverse) private var logs: [VideoLog]
     @State private var selectedLog: VideoLog?
     @State private var showAdvancedInspector: Bool = false
+    
+    // Background flush timer to safely commit telemetry disk I/O without main-thread bottlenecking
+    let flushTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    
     var activeLogs: [VideoLog] {
         if let id = streamController.currentSessionIdentifier {
             return logs.filter { $0.sessionIdentifier == id }
@@ -71,6 +75,9 @@ struct DashboardView: View {
         .inspector(isPresented: $showAdvancedInspector) {
             AdvancedInspectorView(streamController: streamController)
                 .inspectorColumnWidth(min: 400, ideal: 500, max: 700)
+        }
+        .onReceive(flushTimer) { _ in
+            streamController.flushToDisk()
         }
     }
 }

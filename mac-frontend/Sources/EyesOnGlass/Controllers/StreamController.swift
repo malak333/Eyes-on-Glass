@@ -29,6 +29,7 @@ final class StreamController: Identifiable, Hashable {
     @ObservationIgnored nonisolated let videoFrameSubject = PassthroughSubject<CVPixelBuffer, Never>()
     var videoPID: UInt16? = nil
     var audioPID: UInt16? = nil
+    var videoCodec: String? = nil
     var videoResolution: CGSize? = nil
     var videoColor: String? = nil
     var videoGOPSize: Int? = nil
@@ -122,10 +123,14 @@ final class StreamController: Identifiable, Hashable {
                 }
                 
                 let info = await self.liveStreamService.getStreamInfo()
+                let batchCCs = await self.liveStreamService.popPendingCCErrors()
                 
                 await MainActor.run {
+                    self.streamCCErrors += batchCCs
+                    self.totalCCErrors += batchCCs
                     self.videoPID = info.videoPID
                     self.audioPID = info.audioPID
+                    self.videoCodec = info.videoCodec
                     self.videoResolution = info.resolution
                     self.audioSampleRate = info.audioSampleRate
                     self.audioChannels = info.audioChannels
@@ -236,6 +241,7 @@ final class StreamController: Identifiable, Hashable {
         self.audioVectorscopeData = []
         self.audioPhaseData = []
         self.audioLevelsData = []
+        self.isVBR = false
     }
     
     internal func updateBitrateHistory(delta: Int, elapsed: TimeInterval) {
@@ -272,6 +278,7 @@ final class StreamController: Identifiable, Hashable {
         self.currentSessionStartTime = nil
         self.videoPID = nil
         self.audioPID = nil
+        self.videoCodec = nil
         self.videoResolution = nil
         self.videoColor = nil
         self.videoGOPSize = nil
@@ -347,5 +354,18 @@ final class StreamController: Identifiable, Hashable {
             boundingBoxes: boundingBoxes
         )
         context.insert(log)
+        // SwiftData in-memory @Query handles updates instantly. Disk persist is debounced in flushToDisk().
+    }
+    
+    // Non-isolated enqueue method to completely unblock background ingestion actors
+    nonisolated func enqueueVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?, issueSummary: String? = nil, iatMs: Double? = nil, boundingBoxes: String? = nil) {
+        Task { @MainActor [weak self] in
+            self?.insertVideoLog(videoFilename: videoFilename, timestampSec: timestampSec, nodeSource: nodeSource, nodeBackbone: nodeBackbone, nodeDest: nodeDest, issueType: issueType, issueScore: issueScore, analysisEngine: analysisEngine, thumbnailPath: thumbnailPath, issueSummary: issueSummary, iatMs: iatMs, boundingBoxes: boundingBoxes)
+        }
+    }
+    
+    @MainActor
+    func flushToDisk() {
+        try? self.modelContext?.save()
     }
 }
