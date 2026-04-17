@@ -96,8 +96,8 @@ final class StreamController: Identifiable, Hashable {
         }
     }
     
-    // Injected SwiftData context for the background extraction engine to utilize
-    var modelContext: ModelContext?
+    // Repository for SwiftData operations
+    var repository: VideoLogRepository?
     
     init() {
         self.liveStreamService = LiveStreamService(streamController: self)
@@ -203,7 +203,7 @@ final class StreamController: Identifiable, Hashable {
     
     @MainActor
     func startMonitoring(uri: String, context: ModelContext) async {
-        self.modelContext = context
+        self.repository = VideoLogRepository(modelContext: context)
         self.clearEvents()
         
         self.connectionStatus = "Connecting..."
@@ -265,14 +265,10 @@ final class StreamController: Identifiable, Hashable {
     
     @MainActor
     func clearEvents() {
-        if let context = self.modelContext {
-            let descriptor = FetchDescriptor<VideoLog>(predicate: #Predicate { $0.isArchived == false })
-            if let activeLogs = try? context.fetch(descriptor) {
-                for log in activeLogs {
-                    log.isArchived = true
-                }
-                try? context.save()
-            }
+        if let repo = self.repository {
+            let activeLogs = repo.fetchActiveLogs()
+            repo.archiveLogs(activeLogs)
+            repo.save()
         }
         self.currentSessionIdentifier = nil
         self.currentSessionStartTime = nil
@@ -335,7 +331,7 @@ final class StreamController: Identifiable, Hashable {
 
     @MainActor
     func insertVideoLog(videoFilename: String, timestampSec: Double, nodeSource: String?, nodeBackbone: String?, nodeDest: String?, issueType: String, issueScore: Double?, analysisEngine: String?, thumbnailPath: String?, issueSummary: String? = nil, iatMs: Double? = nil, boundingBoxes: String? = nil) {
-        guard let context = self.modelContext else { return }
+        guard let repo = self.repository else { return }
         let log = VideoLog(
             videoFilename: videoFilename,
             timestampSec: timestampSec,
@@ -353,7 +349,7 @@ final class StreamController: Identifiable, Hashable {
             iatMs: iatMs,
             boundingBoxes: boundingBoxes
         )
-        context.insert(log)
+        repo.insert(log: log)
         // SwiftData in-memory @Query handles updates instantly. Disk persist is debounced in flushToDisk().
     }
     
@@ -366,6 +362,6 @@ final class StreamController: Identifiable, Hashable {
     
     @MainActor
     func flushToDisk() {
-        try? self.modelContext?.save()
+        self.repository?.save()
     }
 }
