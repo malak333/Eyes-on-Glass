@@ -211,7 +211,7 @@ public actor UDPIngestor {
                     setsockopt(fd, SOL_SOCKET, SO_TIMESTAMP, &timestampOn, socklen_t(MemoryLayout<Int32>.size))
                     
                     let flags = fcntl(fd, F_GETFL)
-                    fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+                    _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
                     
                     self.bsdSocketTask = Task.detached(priority: .userInitiated) {
                         let bufferSize = 65536

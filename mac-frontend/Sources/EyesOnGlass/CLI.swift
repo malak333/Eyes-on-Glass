@@ -91,7 +91,7 @@ let baseDirectory = "/Users/michaelnobile/Video Assets"
                 let fetchDescriptor = FetchDescriptor<VideoLog>()
                 do {
                     let logs = try context.fetch(fetchDescriptor)
-                    let detailsMap = logs.map { "\($0.issueType) [\($0.analysisEngine)]" }
+                    let detailsMap = logs.map { "\($0.issueType) [\($0.analysisEngine ?? "Unknown")]" }
                     var foundTypes = Array(Set(detailsMap)).sorted()
                     if isTestMode { foundTypes = ["mock_test_type"] }
                     

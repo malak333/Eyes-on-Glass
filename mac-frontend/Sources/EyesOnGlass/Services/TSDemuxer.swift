@@ -470,7 +470,7 @@ public class TSDemuxer {
                     let descriptorTag = payload[descOffset]
                     let descriptorLength = Int(payload[descOffset+1])
                     if descriptorTag == 0x48 && descOffset + 2 + descriptorLength <= descEnd { // Service Descriptor
-                        let serviceType = payload[descOffset+2]
+                        _ = payload[descOffset+2]
                         let providerNameLen = Int(payload[descOffset+3])
                         
                         var nameOffset = descOffset + 4

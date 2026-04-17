@@ -55,6 +55,12 @@ actor LiveStreamService: VideoLogReporter {
 
     // Frame Dropout Backpressure State
     private let processingState = DropFrameState()
+    
+    private(set) var isStageAVerifying: Bool = false
+    
+    func setStageAVerifyingStatus(_ status: Bool) {
+        self.isStageAVerifying = status
+    }
 
     func incrementPendingCCErrors() {
         Task {
@@ -112,7 +118,8 @@ actor LiveStreamService: VideoLogReporter {
                 guard let self = self else { return }
                 
                 Task {
-                    if !await self.canProcessFrame() {
+                    let canProcess = await self.canProcessFrame()
+                    if !canProcess {
                         appLogger.warning("LiveStreamService: Dropped frame due to Vision backlog backpressure.")
                         return
                     }
@@ -286,7 +293,7 @@ actor LiveStreamService: VideoLogReporter {
             }
             
             if shouldLogOk {
-                await self.streamController?.enqueueVideoLog(
+                self.streamController?.enqueueVideoLog(
                     videoFilename: sessionName,
                     timestampSec: Double(currentFrameIndex),
                     nodeSource: "Live-Multicast",
@@ -303,7 +310,7 @@ actor LiveStreamService: VideoLogReporter {
         } else {
             recordIssueState()
             for issue in combinedIssues {
-                await self.streamController?.enqueueVideoLog(
+                self.streamController?.enqueueVideoLog(
                     videoFilename: sessionName,
                     timestampSec: Double(currentFrameIndex),
                     nodeSource: issue.customNodeSource ?? "Live-Multicast",

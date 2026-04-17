@@ -71,18 +71,16 @@ public class MPEG2Decoder: HardwareVideoDecoder {
     }
     
     private func decodeAccumulatedFrame() {
-        var data = currentFrameData
+        let data = currentFrameData
         let pts = currentFramePTS
         let dts = currentFrameDTS
         
-        var foundSequenceHeader = false
         let scanLimit = min(data.count - 3, 2048)
         var sequenceHeaderEndIndex: Int? = nil
         
         if scanLimit > 0 {
             for i in 0..<scanLimit {
                 if data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01 && data[i+3] == 0xB3 {
-                    foundSequenceHeader = true
                     // Extract Sequence Header and any extensions before GOP (0xB8) or Picture (0x00)
                     for j in (i+4)..<(data.count-3) {
                         if data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x01 {
@@ -221,7 +219,7 @@ public class MPEG2Decoder: HardwareVideoDecoder {
         
         var blockBuffer: CMBlockBuffer?
         var status = data.withUnsafeBytes { ptr in
-            guard let baseAddress = ptr.baseAddress else { return kCMBlockBufferNoErr }
+            guard ptr.baseAddress != nil else { return kCMBlockBufferNoErr }
             return CMBlockBufferCreateWithMemoryBlock(
                 allocator: kCFAllocatorDefault,
                 memoryBlock: nil, // Let it allocate
@@ -280,7 +278,7 @@ public class MPEG2Decoder: HardwareVideoDecoder {
         
         var infoFlagsOut: VTDecodeInfoFlags = []
         
-        let decodeStatus = VTDecompressionSessionDecodeFrame(
+        _ = VTDecompressionSessionDecodeFrame(
             session,
             sampleBuffer: validSampleBuffer,
             flags: [._EnableAsynchronousDecompression],

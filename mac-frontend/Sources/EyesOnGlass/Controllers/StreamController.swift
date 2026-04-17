@@ -98,6 +98,7 @@ final class StreamController: Identifiable, Hashable {
     
     // Repository for SwiftData operations
     var repository: VideoLogRepository?
+    var modelContext: ModelContext?
     
     init() {
         self.liveStreamService = LiveStreamService(streamController: self)
